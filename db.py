@@ -1,0 +1,188 @@
+\
+import asyncpg
+
+
+CREATE_TABLES_SQL = """
+CREATE TABLE IF NOT EXISTS chats (
+    chat_id BIGINT PRIMARY KEY,
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS matches (
+    fixture_id BIGINT PRIMARY KEY,
+    kickoff_utc TIMESTAMPTZ NOT NULL,
+    home_team TEXT NOT NULL,
+    away_team TEXT NOT NULL,
+    group_name TEXT,
+    round_name TEXT,
+    venue TEXT,
+    city TEXT,
+    status_short TEXT,
+    status_long TEXT,
+    home_goals INTEGER,
+    away_goals INTEGER,
+    raw JSONB NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS sent_reminders (
+    fixture_id BIGINT NOT NULL REFERENCES matches(fixture_id) ON DELETE CASCADE,
+    chat_id BIGINT NOT NULL REFERENCES chats(chat_id) ON DELETE CASCADE,
+    reminder_type TEXT NOT NULL,
+    sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (fixture_id, chat_id, reminder_type)
+);
+"""
+
+
+async def create_pool(database_url: str) -> asyncpg.Pool:
+    return await asyncpg.create_pool(dsn=database_url, min_size=1, max_size=5)
+
+
+async def init_db(pool: asyncpg.Pool) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute(CREATE_TABLES_SQL)
+
+
+async def add_chat(pool: asyncpg.Pool, chat_id: int) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO chats(chat_id, is_active)
+            VALUES($1, TRUE)
+            ON CONFLICT(chat_id) DO UPDATE SET is_active = TRUE
+            """,
+            chat_id,
+        )
+
+
+async def stop_chat(pool: asyncpg.Pool, chat_id: int) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE chats SET is_active = FALSE WHERE chat_id = $1",
+            chat_id,
+        )
+
+
+async def get_active_chats(pool: asyncpg.Pool) -> list[int]:
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("SELECT chat_id FROM chats WHERE is_active = TRUE")
+    return [r["chat_id"] for r in rows]
+
+
+async def upsert_match(pool: asyncpg.Pool, match: dict) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO matches(
+                fixture_id,
+                kickoff_utc,
+                home_team,
+                away_team,
+                group_name,
+                round_name,
+                venue,
+                city,
+                status_short,
+                status_long,
+                home_goals,
+                away_goals,
+                raw,
+                updated_at
+            )
+            VALUES(
+                $1, $2, $3, $4, $5, $6, $7,
+                $8, $9, $10, $11, $12, $13::jsonb, NOW()
+            )
+            ON CONFLICT(fixture_id) DO UPDATE SET
+                kickoff_utc = EXCLUDED.kickoff_utc,
+                home_team = EXCLUDED.home_team,
+                away_team = EXCLUDED.away_team,
+                group_name = EXCLUDED.group_name,
+                round_name = EXCLUDED.round_name,
+                venue = EXCLUDED.venue,
+                city = EXCLUDED.city,
+                status_short = EXCLUDED.status_short,
+                status_long = EXCLUDED.status_long,
+                home_goals = EXCLUDED.home_goals,
+                away_goals = EXCLUDED.away_goals,
+                raw = EXCLUDED.raw,
+                updated_at = NOW()
+            """,
+            match["fixture_id"],
+            match["kickoff_utc"],
+            match["home_team"],
+            match["away_team"],
+            match.get("group_name"),
+            match.get("round_name"),
+            match.get("venue"),
+            match.get("city"),
+            match.get("status_short"),
+            match.get("status_long"),
+            match.get("home_goals"),
+            match.get("away_goals"),
+            match["raw"],
+        )
+
+
+async def get_matches_between(pool: asyncpg.Pool, start_utc, end_utc) -> list[asyncpg.Record]:
+    async with pool.acquire() as conn:
+        return await conn.fetch(
+            """
+            SELECT *
+            FROM matches
+            WHERE kickoff_utc >= $1
+              AND kickoff_utc < $2
+            ORDER BY kickoff_utc ASC
+            """,
+            start_utc,
+            end_utc,
+        )
+
+
+async def get_upcoming_for_reminder(pool: asyncpg.Pool, start_utc, end_utc) -> list[asyncpg.Record]:
+    async with pool.acquire() as conn:
+        return await conn.fetch(
+            """
+            SELECT *
+            FROM matches
+            WHERE kickoff_utc >= $1
+              AND kickoff_utc < $2
+              AND COALESCE(status_short, 'NS') IN ('NS', 'TBD')
+            ORDER BY kickoff_utc ASC
+            """,
+            start_utc,
+            end_utc,
+        )
+
+
+async def was_reminder_sent(pool: asyncpg.Pool, fixture_id: int, chat_id: int, reminder_type: str) -> bool:
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT 1
+            FROM sent_reminders
+            WHERE fixture_id = $1
+              AND chat_id = $2
+              AND reminder_type = $3
+            """,
+            fixture_id,
+            chat_id,
+            reminder_type,
+        )
+    return row is not None
+
+
+async def mark_reminder_sent(pool: asyncpg.Pool, fixture_id: int, chat_id: int, reminder_type: str) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO sent_reminders(fixture_id, chat_id, reminder_type)
+            VALUES($1, $2, $3)
+            ON CONFLICT DO NOTHING
+            """,
+            fixture_id,
+            chat_id,
+            reminder_type,
+        )
