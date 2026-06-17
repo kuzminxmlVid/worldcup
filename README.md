@@ -1,69 +1,16 @@
-# World Cup Telegram Bot — local schedule version
+# World Cup Bot — pretty version
 
-Эта версия не ходит во внешние API.
+Что нового:
 
-Расписание лежит физически в репозитории:
+- флаги рядом со сборными
+- более аккуратный формат сообщений
+- группировка матчей по датам
+- кнопки внизу чата: Сегодня, Завтра, 7 дней, Обновить, Источник, Debug
 
-```text
-schedule.json
-```
+## После обновления
 
-Бот при запуске читает этот файл, кладёт 104 матча в PostgreSQL и дальше работает из базы.
+1. Замени файлы в GitHub.
+2. Сделай redeploy на Railway.
+3. В Telegram заново нажми /start, чтобы увидеть клавиатуру.
 
-## Команды
-
-- `/start`
-- `/sync` — перечитать `schedule.json` и перезаписать матчи в Postgres.
-- `/source` — проверить, какой локальный файл читает бот и сколько матчей нашёл.
-- `/debug` — проверить базу и ближайшие матчи.
-- `/today`
-- `/tomorrow`
-- `/week`
-- `/stop`
-
-## Railway переменные
-
-Нужны только:
-
-```env
-BOT_TOKEN=
-DATABASE_URL=
-APP_TZ=Europe/Moscow
-DAILY_HOUR=10
-DAILY_MINUTE=0
-MISE_PYTHON_GITHUB_ATTESTATIONS=false
-```
-
-Больше не нужны:
-
-```env
-API_FOOTBALL_KEY
-API_FOOTBALL_HOST
-SCHEDULE_SOURCE_URL
-SOURCE_TZ
-```
-
-## Проверка после деплоя
-
-В Telegram:
-
-```text
-/source
-/sync
-/debug
-/week
-```
-
-Нормально:
-
-```text
-/source -> Матчей в файле: 104
-/sync -> Готово. Загружено матчей: 104.
-/debug -> Матчей в базе: 104
-```
-
-## Важно
-
-Если в Railway снова будет ошибка `API_FOOTBALL_KEY is not set`, значит Railway запускает старый `config.py`.
-
-В новой версии в коде вообще нет слова `API_FOOTBALL_KEY`.
+Если что-то пошло не так, проверь логи Railway и команду /source.
