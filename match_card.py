@@ -288,3 +288,143 @@ def build_match_card(row, tz: ZoneInfo) -> str:
     temp = Path(tempfile.gettempdir()) / f"match_card_{row['fixture_id']}.png"
     img.convert("RGB").save(temp, format="PNG")
     return str(temp)
+
+
+
+def _wrap_text(draw: ImageDraw.ImageDraw, text: str, font, max_width: int) -> list[str]:
+    if not text:
+        return []
+
+    lines: list[str] = []
+    for paragraph in str(text).splitlines():
+        words = paragraph.split(" ")
+        if not words:
+            lines.append("")
+            continue
+
+        current = ""
+        for word in words:
+            candidate = word if not current else current + " " + word
+            if draw.textlength(candidate, font=font) <= max_width:
+                current = candidate
+            else:
+                if current:
+                    lines.append(current)
+                current = word
+
+        if current:
+            lines.append(current)
+
+    return lines
+
+
+def _draw_wrapped_text(
+    draw: ImageDraw.ImageDraw,
+    xy: tuple[int, int],
+    text: str,
+    font,
+    fill,
+    max_width: int,
+    line_gap: int = 8,
+    max_lines: int | None = None,
+) -> int:
+    x, y = xy
+    lines = _wrap_text(draw, text, font, max_width)
+
+    if max_lines is not None and len(lines) > max_lines:
+        lines = lines[:max_lines]
+        if lines:
+            lines[-1] = lines[-1].rstrip() + "…"
+
+    line_h = font.size + line_gap
+    for line in lines:
+        draw.text((x, y), line, font=font, fill=fill)
+        y += line_h
+
+    return y
+
+
+def build_personal_match_card(row, user_data, tz: ZoneInfo) -> str:
+    width, height = 1600, 2200
+    img = Image.new("RGBA", (width, height), (10, 18, 34, 255))
+    draw = ImageDraw.Draw(img)
+
+    for y in range(height):
+        ratio = y / max(height - 1, 1)
+        r = int(8 + 22 * ratio)
+        g = int(16 + 28 * ratio)
+        b = int(34 + 52 * ratio)
+        draw.line((0, y, width, y), fill=(r, g, b, 255))
+
+    title_font = _font(FONT_BOLD, 44)
+    info_font = _font(FONT_REGULAR, 34)
+    stage_font = _font(FONT_BOLD, 30)
+    vs_font = _font(FONT_BOLD, 52)
+    team_font_big = _font(FONT_BOLD, 62)
+    section_font = _font(FONT_BOLD, 38)
+    body_font = _font(FONT_REGULAR, 34)
+    small_font = _font(FONT_REGULAR, 28)
+
+    kickoff = row["kickoff_utc"].astimezone(tz)
+    stage = _safe_group_label(row.get("group_name") or row.get("round_name"))
+
+    _panel(draw, (55, 55, width - 55, height - 55), (20, 36, 60, 120), (247, 247, 245, 255), radius=42, width=3)
+
+    # Header
+    _panel(draw, (95, 95, 1505, 205), (8, 22, 42, 210), (96, 130, 180, 255), radius=24, width=2)
+    draw.text((125, 115), "WORLD CUP 2026", font=title_font, fill=(235, 240, 248, 255))
+    draw.text((125, 165), kickoff.strftime("%d.%m.%Y   %H:%M"), font=info_font, fill=(195, 208, 228, 255))
+
+    stage_w = draw.textlength(stage, font=stage_font)
+    badge_w = int(stage_w + 56)
+    _panel(draw, (1505 - badge_w - 24, 125, 1505 - 24, 180), (33, 54, 84, 255), (120, 155, 210, 255), radius=18, width=2)
+    draw.text((1505 - badge_w - 24 + 28, 139), stage, font=stage_font, fill=(232, 240, 250, 255))
+
+    # Pitch / teams
+    _panel(draw, (110, 245, 1490, 860), (15, 33, 56, 120), (86, 120, 170, 255), radius=30, width=2)
+    draw.line((800, 300, 800, 810), fill=(62, 90, 128, 255), width=3)
+    draw.ellipse((710, 475, 890, 655), outline=(62, 90, 128, 255), width=3)
+
+    left_box = (140, 305, 690, 745)
+    right_box = (910, 305, 1460, 745)
+    _panel(draw, left_box, (27, 52, 103, 255), (120, 160, 225, 255), radius=28, width=3)
+    _panel(draw, right_box, (114, 37, 37, 255), (230, 130, 130, 255), radius=28, width=3)
+
+    _draw_flag_image(img, str(row["home_team"]), (205, 360, 625, 550))
+    _draw_flag_image(img, str(row["away_team"]), (975, 360, 1395, 550))
+
+    left_name = _short(str(row["home_team"]))
+    right_name = _short(str(row["away_team"]))
+    left_font = _fit_text(draw, left_name, 470, 62)
+    right_font = _fit_text(draw, right_name, 470, 62)
+    left_w = draw.textlength(left_name, font=left_font)
+    right_w = draw.textlength(right_name, font=right_font)
+    draw.text((415 - left_w / 2, 615), left_name, font=left_font, fill=(255, 255, 255, 255))
+    draw.text((1185 - right_w / 2, 615), right_name, font=right_font, fill=(255, 255, 255, 255))
+
+    _panel(draw, (720, 510, 880, 620), (244, 191, 78, 255), (255, 224, 140, 255), radius=28, width=2)
+    vs_w = draw.textlength("VS", font=vs_font)
+    draw.text((800 - vs_w / 2, 539), "VS", font=vs_font, fill=(25, 25, 25, 255))
+
+    venue = str(row.get("venue") or "Venue TBA")
+    venue_text = f"STADIUM  •  {venue}"
+    _panel(draw, (350, 885, 1250, 940), (8, 22, 42, 220), (96, 130, 180, 255), radius=22, width=2)
+    venue_w = draw.textlength(venue_text, font=small_font)
+    draw.text((800 - venue_w / 2, 901), venue_text, font=small_font, fill=(220, 232, 245, 255))
+
+    prediction = user_data["prediction"] if user_data and user_data["prediction"] else "Пока не указан."
+    note = user_data["note"] if user_data and user_data["note"] else "Пока не добавлена."
+
+    # Prediction panel
+    _panel(draw, (95, 990, 1505, 1190), (10, 24, 45, 230), (96, 130, 180, 255), radius=26, width=2)
+    draw.text((135, 1025), "ПРОГНОЗ", font=section_font, fill=(235, 240, 248, 255))
+    _draw_wrapped_text(draw, (135, 1085), prediction, body_font, (220, 232, 245, 255), 1330, max_lines=2)
+
+    # Note panel
+    _panel(draw, (95, 1230, 1505, 2110), (10, 24, 45, 230), (96, 130, 180, 255), radius=26, width=2)
+    draw.text((135, 1265), "ЗАМЕТКА", font=section_font, fill=(235, 240, 248, 255))
+    _draw_wrapped_text(draw, (135, 1330), note, body_font, (220, 232, 245, 255), 1330, max_lines=22)
+
+    temp = Path(tempfile.gettempdir()) / f"match_personal_card_{row['fixture_id']}.png"
+    img.convert("RGB").save(temp, format="PNG")
+    return str(temp)

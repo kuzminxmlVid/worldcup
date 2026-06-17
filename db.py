@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS pending_inputs (
     user_id BIGINT NOT NULL,
     fixture_id BIGINT NOT NULL,
     action TEXT NOT NULL,
+    source_message_id BIGINT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (chat_id, user_id)
 );
@@ -62,6 +63,7 @@ async def init_db(pool: asyncpg.Pool) -> None:
     async with pool.acquire() as conn:
         await conn.execute(CREATE_TABLES_SQL)
         await conn.execute("ALTER TABLE chats ADD COLUMN IF NOT EXISTS reminders_enabled BOOLEAN NOT NULL DEFAULT TRUE")
+        await conn.execute("ALTER TABLE pending_inputs ADD COLUMN IF NOT EXISTS source_message_id BIGINT")
 
 
 async def add_chat(pool: asyncpg.Pool, chat_id: int) -> None:
@@ -78,10 +80,7 @@ async def add_chat(pool: asyncpg.Pool, chat_id: int) -> None:
 
 async def stop_chat(pool: asyncpg.Pool, chat_id: int) -> None:
     async with pool.acquire() as conn:
-        await conn.execute(
-            "UPDATE chats SET is_active = FALSE WHERE chat_id = $1",
-            chat_id,
-        )
+        await conn.execute("UPDATE chats SET is_active = FALSE WHERE chat_id = $1", chat_id)
 
 
 async def get_active_chats(pool: asyncpg.Pool) -> list[int]:
@@ -100,11 +99,10 @@ async def get_active_reminder_chats(pool: asyncpg.Pool) -> list[int]:
 
 async def get_chat_settings(pool: asyncpg.Pool, chat_id: int):
     async with pool.acquire() as conn:
-        row = await conn.fetchrow(
+        return await conn.fetchrow(
             "SELECT is_active, reminders_enabled FROM chats WHERE chat_id = $1",
             chat_id,
         )
-    return row
 
 
 async def set_reminders_enabled(pool: asyncpg.Pool, chat_id: int, enabled: bool) -> None:
@@ -122,10 +120,7 @@ async def set_reminders_enabled(pool: asyncpg.Pool, chat_id: int, enabled: bool)
 
 async def toggle_reminders(pool: asyncpg.Pool, chat_id: int) -> bool:
     async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT reminders_enabled FROM chats WHERE chat_id = $1",
-            chat_id,
-        )
+        row = await conn.fetchrow("SELECT reminders_enabled FROM chats WHERE chat_id = $1", chat_id)
         if row is None:
             await conn.execute(
                 "INSERT INTO chats(chat_id, is_active, reminders_enabled) VALUES($1, TRUE, FALSE)",
@@ -164,10 +159,7 @@ async def replace_matches(pool: asyncpg.Pool, matches: list[dict]) -> int:
                         raw,
                         updated_at
                     )
-                    VALUES(
-                        $1, $2, $3, $4, $5, $6, $7,
-                        $8, $9, $10, $11, $12::jsonb, NOW()
-                    )
+                    VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, NOW())
                     """,
                     match["fixture_id"],
                     match["kickoff_utc"],
@@ -202,14 +194,7 @@ async def get_matches_between(pool: asyncpg.Pool, start_utc, end_utc):
 
 async def get_match_by_id(pool: asyncpg.Pool, fixture_id: int):
     async with pool.acquire() as conn:
-        return await conn.fetchrow(
-            """
-            SELECT *
-            FROM matches
-            WHERE fixture_id = $1
-            """,
-            fixture_id,
-        )
+        return await conn.fetchrow("SELECT * FROM matches WHERE fixture_id = $1", fixture_id)
 
 
 async def get_upcoming_for_reminder(pool: asyncpg.Pool, start_utc, end_utc):
@@ -354,21 +339,30 @@ async def clear_user_match_data(pool: asyncpg.Pool, chat_id: int, user_id: int, 
         )
 
 
-async def set_pending_input(pool: asyncpg.Pool, chat_id: int, user_id: int, fixture_id: int, action: str) -> None:
+async def set_pending_input(
+    pool: asyncpg.Pool,
+    chat_id: int,
+    user_id: int,
+    fixture_id: int,
+    action: str,
+    source_message_id: int | None = None,
+) -> None:
     async with pool.acquire() as conn:
         await conn.execute(
             """
-            INSERT INTO pending_inputs(chat_id, user_id, fixture_id, action, created_at)
-            VALUES($1, $2, $3, $4, NOW())
+            INSERT INTO pending_inputs(chat_id, user_id, fixture_id, action, source_message_id, created_at)
+            VALUES($1, $2, $3, $4, $5, NOW())
             ON CONFLICT(chat_id, user_id) DO UPDATE SET
                 fixture_id = EXCLUDED.fixture_id,
                 action = EXCLUDED.action,
+                source_message_id = EXCLUDED.source_message_id,
                 created_at = NOW()
             """,
             chat_id,
             user_id,
             fixture_id,
             action,
+            source_message_id,
         )
 
 
@@ -376,7 +370,7 @@ async def get_pending_input(pool: asyncpg.Pool, chat_id: int, user_id: int):
     async with pool.acquire() as conn:
         return await conn.fetchrow(
             """
-            SELECT fixture_id, action, created_at
+            SELECT fixture_id, action, source_message_id, created_at
             FROM pending_inputs
             WHERE chat_id = $1
               AND user_id = $2

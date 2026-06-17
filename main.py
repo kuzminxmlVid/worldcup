@@ -4,8 +4,9 @@ from pathlib import Path
 from datetime import datetime, timedelta
 
 from aiogram import Bot, Dispatcher, F
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
-from aiogram.types import Message, CallbackQuery, FSInputFile
+from aiogram.types import Message, CallbackQuery, FSInputFile, InputMediaPhoto
 
 import db
 from config import load_config
@@ -15,9 +16,7 @@ from formatting import (
     day_bounds_utc,
     format_matches,
     format_debug,
-    format_single_match,
     format_alerts_status,
-    format_user_match_data,
     format_note_too_long,
     format_prediction_too_long,
     split_telegram_text,
@@ -25,11 +24,11 @@ from formatting import (
 )
 from keyboards import main_keyboard, nav_inline_keyboard, match_inline_keyboard
 from local_schedule import load_matches, SCHEDULE_PATH
-from match_card import build_match_card
+from match_card import build_personal_match_card
 from scheduler import setup_scheduler, sync_fixtures
 
 
-VERSION = "local-schedule-2026-06-17-v9-predictions-notes"
+VERSION = "local-schedule-2026-06-17-v11-photo-card-notes"
 
 logging.basicConfig(level=logging.INFO)
 
@@ -49,16 +48,60 @@ async def reminders_enabled_for(chat_id: int) -> bool:
     return bool(settings["reminders_enabled"]) if settings else False
 
 
-async def match_keyboard_for(message: Message, fixture_id: int):
-    enabled = await reminders_enabled_for(message.chat.id)
-    user_id = user_id_from_message(message)
-    user_data = await db.get_user_match_data(pool, message.chat.id, user_id, fixture_id)
+async def match_keyboard_for(chat_id: int, user_id: int, fixture_id: int):
+    enabled = await reminders_enabled_for(chat_id)
+    user_data = await db.get_user_match_data(pool, chat_id, user_id, fixture_id)
     return match_inline_keyboard(
         fixture_id=fixture_id,
         reminders_enabled=enabled,
         has_prediction=bool(user_data and user_data["prediction"]),
         has_note=bool(user_data and user_data["note"]),
     )
+
+
+async def edit_or_send_match_card(
+    message: Message,
+    fixture_id: int,
+    user_id: int | None = None,
+    source_message_id: int | None = None,
+):
+    user_id = user_id or user_id_from_message(message)
+    row = await db.get_match_by_id(pool, fixture_id)
+
+    if not row:
+        await message.answer("Не нашёл этот матч в базе. Попробуй /sync и потом /next.")
+        return
+
+    user_data = await db.get_user_match_data(pool, message.chat.id, user_id, fixture_id)
+    card_path = build_personal_match_card(row, user_data, config.app_tz)
+    keyboard = await match_keyboard_for(message.chat.id, user_id, fixture_id)
+
+    try:
+        if source_message_id:
+            try:
+                await bot.edit_message_media(
+                    chat_id=message.chat.id,
+                    message_id=source_message_id,
+                    media=InputMediaPhoto(
+                        media=FSInputFile(card_path),
+                        caption="⏭️ Следующий матч ЧМ",
+                    ),
+                    reply_markup=keyboard,
+                )
+                return
+            except TelegramBadRequest:
+                pass
+
+        await message.answer_photo(
+            FSInputFile(card_path),
+            caption="⏭️ Следующий матч ЧМ",
+            reply_markup=keyboard,
+        )
+    finally:
+        try:
+            Path(card_path).unlink(missing_ok=True)
+        except Exception:
+            pass
 
 
 async def send_text(message: Message, text: str):
@@ -91,45 +134,6 @@ async def send_week_text(message: Message):
     await send_text(message, format_matches("🏆 Матчи ЧМ на 7 дней", rows, config.app_tz))
 
 
-async def send_match_personal_post(message: Message, row):
-    user_id = user_id_from_message(message)
-    enabled = await reminders_enabled_for(message.chat.id)
-    user_data = await db.get_user_match_data(pool, message.chat.id, user_id, row["fixture_id"])
-
-    await message.answer(
-        format_user_match_data(row, user_data, config.app_tz),
-        reply_markup=match_inline_keyboard(
-            fixture_id=row["fixture_id"],
-            reminders_enabled=enabled,
-            has_prediction=bool(user_data and user_data["prediction"]),
-            has_note=bool(user_data and user_data["note"]),
-        ),
-    )
-
-
-async def send_match_by_id(message: Message, fixture_id: int):
-    row = await db.get_match_by_id(pool, fixture_id)
-    if not row:
-        await message.answer("Не нашёл этот матч в базе. Попробуй /sync и потом /next.")
-        return
-
-    caption = format_single_match(row, config.app_tz)
-    card_path = build_match_card(row, config.app_tz)
-    try:
-        await message.answer_photo(
-            FSInputFile(card_path),
-            caption=caption,
-            reply_markup=await match_keyboard_for(message, row["fixture_id"]),
-        )
-    finally:
-        try:
-            Path(card_path).unlink(missing_ok=True)
-        except Exception:
-            pass
-
-    await send_match_personal_post(message, row)
-
-
 async def send_next_match_text(message: Message):
     row = await db.get_next_match(pool)
 
@@ -138,7 +142,7 @@ async def send_next_match_text(message: Message):
         await message.answer("Ближайших матчей после текущего времени нет.", reply_markup=nav_inline_keyboard(enabled))
         return
 
-    await send_match_by_id(message, row["fixture_id"])
+    await edit_or_send_match_card(message, row["fixture_id"])
 
 
 async def send_source_text(message: Message):
@@ -167,13 +171,13 @@ async def toggle_alerts(message: Message):
     await message.answer(format_alerts_status(new_value), reply_markup=nav_inline_keyboard(new_value))
 
 
-async def prompt_prediction(message: Message, fixture_id: int):
+async def prompt_prediction(message: Message, fixture_id: int, user_id: int, source_message_id: int | None = None):
     row = await db.get_match_by_id(pool, fixture_id)
     if not row:
         await message.answer("Не нашёл этот матч в базе.")
         return
 
-    await db.set_pending_input(pool, message.chat.id, user_id_from_message(message), fixture_id, "prediction")
+    await db.set_pending_input(pool, message.chat.id, user_id, fixture_id, "prediction", source_message_id)
     await message.answer(
         "Пришли прогноз одним сообщением.\n\n"
         "Например: 2:1 или Portugal 2:1 DR Congo.\n"
@@ -181,13 +185,13 @@ async def prompt_prediction(message: Message, fixture_id: int):
     )
 
 
-async def prompt_note(message: Message, fixture_id: int):
+async def prompt_note(message: Message, fixture_id: int, user_id: int, source_message_id: int | None = None):
     row = await db.get_match_by_id(pool, fixture_id)
     if not row:
         await message.answer("Не нашёл этот матч в базе.")
         return
 
-    await db.set_pending_input(pool, message.chat.id, user_id_from_message(message), fixture_id, "note")
+    await db.set_pending_input(pool, message.chat.id, user_id, fixture_id, "note", source_message_id)
     await message.answer(
         "Пришли заметку по матчу одним сообщением.\n\n"
         f"Максимум: {NOTE_MAX_LEN} символов.\n"
@@ -207,6 +211,7 @@ async def handle_pending_text(message: Message) -> bool:
 
     fixture_id = int(pending["fixture_id"])
     action = pending["action"]
+    source_message_id = pending["source_message_id"]
     text = message.text.strip()
 
     if action == "prediction":
@@ -220,11 +225,7 @@ async def handle_pending_text(message: Message) -> bool:
 
         await db.save_prediction(pool, message.chat.id, user_id, fixture_id, text)
         await db.clear_pending_input(pool, message.chat.id, user_id)
-
-        row = await db.get_match_by_id(pool, fixture_id)
-        await message.answer("Прогноз сохранил.")
-        if row:
-            await send_match_personal_post(message, row)
+        await edit_or_send_match_card(message, fixture_id, user_id, source_message_id)
         return True
 
     if action == "note":
@@ -238,11 +239,7 @@ async def handle_pending_text(message: Message) -> bool:
 
         await db.save_note(pool, message.chat.id, user_id, fixture_id, text)
         await db.clear_pending_input(pool, message.chat.id, user_id)
-
-        row = await db.get_match_by_id(pool, fixture_id)
-        await message.answer("Заметку сохранил.")
-        if row:
-            await send_match_personal_post(message, row)
+        await edit_or_send_match_card(message, fixture_id, user_id, source_message_id)
         return True
 
     await db.clear_pending_input(pool, message.chat.id, user_id)
@@ -253,10 +250,7 @@ async def handle_pending_text(message: Message) -> bool:
 async def start(message: Message):
     await db.add_chat(pool, message.chat.id)
     enabled = await reminders_enabled_for(message.chat.id)
-    await message.answer(
-        "Готово. Бот запущен.\n\n" + help_text(enabled),
-        reply_markup=main_keyboard(),
-    )
+    await message.answer("Готово. Бот запущен.\n\n" + help_text(enabled), reply_markup=main_keyboard())
 
 
 @dp.message(Command("menu"))
@@ -387,25 +381,21 @@ async def match_callback(callback: CallbackQuery):
 
     action = parts[1]
     fixture_id = int(parts[2])
+    source_message_id = callback.message.message_id if callback.message else None
+    user_id = callback.from_user.id
+
     await callback.answer()
 
     if action == "prediction":
-        await prompt_prediction(callback.message, fixture_id)
+        await prompt_prediction(callback.message, fixture_id, user_id, source_message_id)
     elif action == "note":
-        await prompt_note(callback.message, fixture_id)
+        await prompt_note(callback.message, fixture_id, user_id, source_message_id)
     elif action == "show":
-        row = await db.get_match_by_id(pool, fixture_id)
-        if row:
-            await send_match_personal_post(callback.message, row)
-        else:
-            await callback.message.answer("Не нашёл этот матч в базе.")
+        await edit_or_send_match_card(callback.message, fixture_id, user_id, source_message_id)
     elif action == "clear":
-        await db.clear_user_match_data(pool, callback.message.chat.id, callback.from_user.id, fixture_id)
-        await db.clear_pending_input(pool, callback.message.chat.id, callback.from_user.id)
-        await callback.message.answer("Очистил прогноз и заметку по этому матчу.")
-        row = await db.get_match_by_id(pool, fixture_id)
-        if row:
-            await send_match_personal_post(callback.message, row)
+        await db.clear_user_match_data(pool, callback.message.chat.id, user_id, fixture_id)
+        await db.clear_pending_input(pool, callback.message.chat.id, user_id)
+        await edit_or_send_match_card(callback.message, fixture_id, user_id, source_message_id)
 
 
 @dp.message(F.text)
@@ -414,10 +404,7 @@ async def pending_or_unknown_text(message: Message):
     if handled:
         return
 
-    await message.answer(
-        "Не понял команду. Выбери действие кнопками снизу или нажми /menu.",
-        reply_markup=main_keyboard(),
-    )
+    await message.answer("Не понял команду. Выбери действие кнопками снизу или нажми /menu.", reply_markup=main_keyboard())
 
 
 async def main():

@@ -221,7 +221,7 @@ def split_telegram_text(text: str, limit: int = 3900) -> list[str]:
 
 
 
-NOTE_MAX_LEN = 2000
+NOTE_MAX_LEN = 1500
 PREDICTION_MAX_LEN = 200
 
 
