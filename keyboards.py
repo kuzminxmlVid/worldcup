@@ -6,14 +6,16 @@ def main_keyboard() -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text="Сегодня"), KeyboardButton(text="Завтра")],
             [KeyboardButton(text="Следующий матч"), KeyboardButton(text="7 дней")],
-            [KeyboardButton(text="Обновить"), KeyboardButton(text="Меню")],
+            [KeyboardButton(text="Автопост"), KeyboardButton(text="Обновить")],
+            [KeyboardButton(text="Меню")],
         ],
         resize_keyboard=True,
         input_field_placeholder="Выбери действие",
     )
 
 
-def nav_inline_keyboard() -> InlineKeyboardMarkup:
+def nav_inline_keyboard(reminders_enabled: bool | None = None) -> InlineKeyboardMarkup:
+    alerts_label = "Автопост: вкл" if reminders_enabled else "Автопост: выкл"
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -25,7 +27,10 @@ def nav_inline_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="7 дней", callback_data="nav:week"),
             ],
             [
+                InlineKeyboardButton(text=alerts_label, callback_data="nav:alerts_toggle"),
                 InlineKeyboardButton(text="Обновить", callback_data="nav:sync"),
+            ],
+            [
                 InlineKeyboardButton(text="Меню", callback_data="nav:menu"),
             ],
         ]

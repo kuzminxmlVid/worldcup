@@ -1,11 +1,14 @@
-\
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
+from aiogram.types import FSInputFile
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 import db
 from formatting import day_bounds_utc, format_matches, format_reminder, split_telegram_text
+from keyboards import nav_inline_keyboard
 from local_schedule import load_matches
+from match_card import build_match_card
 
 
 async def sync_fixtures(pool) -> int:
@@ -21,8 +24,12 @@ async def send_daily_schedule(bot, pool, tz):
     text = format_matches("🏆 Матчи ЧМ сегодня", rows, tz)
 
     for chat_id in await db.get_active_chats(pool):
-        for part in split_telegram_text(text):
-            await bot.send_message(chat_id, part)
+        settings = await db.get_chat_settings(pool, chat_id)
+        enabled = bool(settings['reminders_enabled']) if settings else False
+        parts = split_telegram_text(text)
+        for i, part in enumerate(parts):
+            markup = nav_inline_keyboard(enabled) if i == len(parts) - 1 else None
+            await bot.send_message(chat_id, part, reply_markup=markup)
 
 
 async def send_hour_reminders(bot, pool, tz):
@@ -31,7 +38,7 @@ async def send_hour_reminders(bot, pool, tz):
     end_utc = now + timedelta(minutes=65)
 
     rows = await db.get_upcoming_for_reminder(pool, start_utc, end_utc)
-    chats = await db.get_active_chats(pool)
+    chats = await db.get_active_reminder_chats(pool)
 
     for row in rows:
         for chat_id in chats:
@@ -39,7 +46,21 @@ async def send_hour_reminders(bot, pool, tz):
             if sent:
                 continue
 
-            await bot.send_message(chat_id, format_reminder(row, tz))
+            caption = format_reminder(row, tz)
+            card_path = build_match_card(row, tz)
+            try:
+                await bot.send_photo(
+                    chat_id,
+                    FSInputFile(card_path),
+                    caption=caption,
+                    reply_markup=nav_inline_keyboard(True),
+                )
+            finally:
+                try:
+                    Path(card_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
+
             await db.mark_reminder_sent(pool, row["fixture_id"], chat_id, "one_hour")
 
 

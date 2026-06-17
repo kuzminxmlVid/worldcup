@@ -178,15 +178,23 @@ def format_debug(count, first_row, last_row, next_rows, tz: ZoneInfo) -> str:
     return "\n".join(lines)
 
 
-def help_text() -> str:
+def format_alerts_status(enabled: bool) -> str:
+    if enabled:
+        return "🔔 Автопост за час до матча включён. Я буду присылать карточку ближайшего матча автоматически."
+    return "🔕 Автопост за час до матча выключен. Автоматические карточки приходить не будут."
+
+
+def help_text(reminders_enabled: bool | None = True) -> str:
+    status = "включён" if reminders_enabled else "выключен"
     return (
         "Что умею:\n"
         "• Сегодня\n"
         "• Завтра\n"
-        "• Следующий матч с карточкой\n"
+        "• Следующий матч с PNG-карточкой и флагами\n"
         "• Расписание на 7 дней\n"
-        "• Обновить локальное расписание\n\n"
-        "Можно пользоваться кнопками снизу или командами /today /tomorrow /next /week /sync"
+        "• Автопост за час до матча\n\n"
+        f"Сейчас автопост: {status}.\n"
+        "Можно пользоваться кнопками снизу или командами /today /tomorrow /next /week /sync /alerts"
     )
 
 

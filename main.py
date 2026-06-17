@@ -9,14 +9,22 @@ from aiogram.types import Message, CallbackQuery, FSInputFile
 
 import db
 from config import load_config
-from formatting import day_bounds_utc, format_matches, format_debug, format_single_match, split_telegram_text, help_text
+from formatting import (
+    day_bounds_utc,
+    format_matches,
+    format_debug,
+    format_single_match,
+    format_alerts_status,
+    split_telegram_text,
+    help_text,
+)
 from keyboards import main_keyboard, nav_inline_keyboard
 from local_schedule import load_matches, SCHEDULE_PATH
 from match_card import build_match_card
 from scheduler import setup_scheduler, sync_fixtures
 
 
-VERSION = "local-schedule-2026-06-17-v4-illustrated-ux"
+VERSION = "local-schedule-2026-06-17-v5-alerts-png-flags"
 
 logging.basicConfig(level=logging.INFO)
 
@@ -27,10 +35,16 @@ dp = Dispatcher()
 pool = None
 
 
+async def reminders_enabled_for(chat_id: int) -> bool:
+    settings = await db.get_chat_settings(pool, chat_id)
+    return bool(settings['reminders_enabled']) if settings else False
+
+
 async def send_text(message: Message, text: str):
+    enabled = await reminders_enabled_for(message.chat.id)
     parts = split_telegram_text(text)
     for i, part in enumerate(parts):
-        markup = nav_inline_keyboard() if i == len(parts) - 1 else None
+        markup = nav_inline_keyboard(enabled) if i == len(parts) - 1 else None
         await message.answer(part, reply_markup=markup)
 
 
@@ -58,15 +72,16 @@ async def send_week_text(message: Message):
 
 async def send_next_match_text(message: Message):
     row = await db.get_next_match(pool)
+    enabled = await reminders_enabled_for(message.chat.id)
 
     if not row:
-        await message.answer("Ближайших матчей после текущего времени нет.", reply_markup=nav_inline_keyboard())
+        await message.answer("Ближайших матчей после текущего времени нет.", reply_markup=nav_inline_keyboard(enabled))
         return
 
     caption = format_single_match(row, config.app_tz)
     card_path = build_match_card(row, config.app_tz)
     try:
-        await message.answer_photo(FSInputFile(card_path), caption=caption, reply_markup=nav_inline_keyboard())
+        await message.answer_photo(FSInputFile(card_path), caption=caption, reply_markup=nav_inline_keyboard(enabled))
     finally:
         try:
             Path(card_path).unlink(missing_ok=True)
@@ -75,6 +90,7 @@ async def send_next_match_text(message: Message):
 
 
 async def send_source_text(message: Message):
+    enabled = await reminders_enabled_for(message.chat.id)
     try:
         matches = load_matches()
         await message.answer(
@@ -82,22 +98,29 @@ async def send_source_text(message: Message):
             f"Файл: {SCHEDULE_PATH.name}\n"
             f"Версия кода: {VERSION}\n"
             f"Матчей в файле: {len(matches)}",
-            reply_markup=nav_inline_keyboard(),
+            reply_markup=nav_inline_keyboard(enabled),
         )
     except Exception as e:
-        await message.answer(f"Не получилось прочитать schedule.json: {e}", reply_markup=nav_inline_keyboard())
+        await message.answer(f"Не получилось прочитать schedule.json: {e}", reply_markup=nav_inline_keyboard(enabled))
 
 
 async def send_debug_text(message: Message):
+    enabled = await reminders_enabled_for(message.chat.id)
     count, first_row, last_row, next_rows = await db.get_debug_stats(pool)
-    await message.answer(format_debug(count, first_row, last_row, next_rows, config.app_tz), reply_markup=nav_inline_keyboard())
+    await message.answer(format_debug(count, first_row, last_row, next_rows, config.app_tz), reply_markup=nav_inline_keyboard(enabled))
+
+
+async def toggle_alerts(message: Message):
+    new_value = await db.toggle_reminders(pool, message.chat.id)
+    await message.answer(format_alerts_status(new_value), reply_markup=nav_inline_keyboard(new_value))
 
 
 @dp.message(Command("start"))
 async def start(message: Message):
     await db.add_chat(pool, message.chat.id)
+    enabled = await reminders_enabled_for(message.chat.id)
     await message.answer(
-        "Готово. Бот запущен.\n\n" + help_text(),
+        "Готово. Бот запущен.\n\n" + help_text(enabled),
         reply_markup=main_keyboard(),
     )
 
@@ -105,7 +128,26 @@ async def start(message: Message):
 @dp.message(Command("menu"))
 @dp.message(F.text == "Меню")
 async def menu(message: Message):
-    await message.answer(help_text(), reply_markup=main_keyboard())
+    enabled = await reminders_enabled_for(message.chat.id)
+    await message.answer(help_text(enabled), reply_markup=main_keyboard())
+
+
+@dp.message(Command("alerts"))
+@dp.message(F.text == "Автопост")
+async def alerts_toggle(message: Message):
+    await toggle_alerts(message)
+
+
+@dp.message(Command("alerts_on"))
+async def alerts_on(message: Message):
+    await db.set_reminders_enabled(pool, message.chat.id, True)
+    await message.answer(format_alerts_status(True), reply_markup=nav_inline_keyboard(True))
+
+
+@dp.message(Command("alerts_off"))
+async def alerts_off(message: Message):
+    await db.set_reminders_enabled(pool, message.chat.id, False)
+    await message.answer(format_alerts_status(False), reply_markup=nav_inline_keyboard(False))
 
 
 @dp.message(Command("stop"))
@@ -116,13 +158,14 @@ async def stop(message: Message):
 
 @dp.message(Command("sync"))
 async def sync(message: Message):
+    enabled = await reminders_enabled_for(message.chat.id)
     await message.answer("Обновляю расписание из локального файла...")
     try:
         count = await sync_fixtures(pool)
-        await message.answer(f"Готово. Загружено матчей: {count}.", reply_markup=nav_inline_keyboard())
+        await message.answer(f"Готово. Загружено матчей: {count}.", reply_markup=nav_inline_keyboard(enabled))
     except Exception as e:
         logging.exception("Sync failed")
-        await message.answer(f"Не получилось обновить расписание: {e}", reply_markup=nav_inline_keyboard())
+        await message.answer(f"Не получилось обновить расписание: {e}", reply_markup=nav_inline_keyboard(enabled))
 
 
 @dp.message(Command("today"))
@@ -197,6 +240,8 @@ async def nav_callback(callback: CallbackQuery):
         await sync(callback.message)
     elif action == "menu":
         await menu(callback.message)
+    elif action == "alerts_toggle":
+        await toggle_alerts(callback.message)
 
 
 async def main():

@@ -1,4 +1,3 @@
-\
 import asyncpg
 
 
@@ -6,6 +5,7 @@ CREATE_TABLES_SQL = """
 CREATE TABLE IF NOT EXISTS chats (
     chat_id BIGINT PRIMARY KEY,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    reminders_enabled BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -42,14 +42,15 @@ async def create_pool(database_url: str) -> asyncpg.Pool:
 async def init_db(pool: asyncpg.Pool) -> None:
     async with pool.acquire() as conn:
         await conn.execute(CREATE_TABLES_SQL)
+        await conn.execute("ALTER TABLE chats ADD COLUMN IF NOT EXISTS reminders_enabled BOOLEAN NOT NULL DEFAULT TRUE")
 
 
 async def add_chat(pool: asyncpg.Pool, chat_id: int) -> None:
     async with pool.acquire() as conn:
         await conn.execute(
             """
-            INSERT INTO chats(chat_id, is_active)
-            VALUES($1, TRUE)
+            INSERT INTO chats(chat_id, is_active, reminders_enabled)
+            VALUES($1, TRUE, TRUE)
             ON CONFLICT(chat_id) DO UPDATE SET is_active = TRUE
             """,
             chat_id,
@@ -68,6 +69,58 @@ async def get_active_chats(pool: asyncpg.Pool) -> list[int]:
     async with pool.acquire() as conn:
         rows = await conn.fetch("SELECT chat_id FROM chats WHERE is_active = TRUE")
     return [r["chat_id"] for r in rows]
+
+
+async def get_active_reminder_chats(pool: asyncpg.Pool) -> list[int]:
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT chat_id FROM chats WHERE is_active = TRUE AND reminders_enabled = TRUE"
+        )
+    return [r["chat_id"] for r in rows]
+
+
+async def get_chat_settings(pool: asyncpg.Pool, chat_id: int):
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT is_active, reminders_enabled FROM chats WHERE chat_id = $1",
+            chat_id,
+        )
+    return row
+
+
+async def set_reminders_enabled(pool: asyncpg.Pool, chat_id: int, enabled: bool) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO chats(chat_id, is_active, reminders_enabled)
+            VALUES($1, TRUE, $2)
+            ON CONFLICT(chat_id) DO UPDATE SET is_active = TRUE, reminders_enabled = $2
+            """,
+            chat_id,
+            enabled,
+        )
+
+
+async def toggle_reminders(pool: asyncpg.Pool, chat_id: int) -> bool:
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT reminders_enabled FROM chats WHERE chat_id = $1",
+            chat_id,
+        )
+        if row is None:
+            await conn.execute(
+                "INSERT INTO chats(chat_id, is_active, reminders_enabled) VALUES($1, TRUE, FALSE)",
+                chat_id,
+            )
+            return False
+
+        new_value = not bool(row["reminders_enabled"])
+        await conn.execute(
+            "UPDATE chats SET reminders_enabled = $2, is_active = TRUE WHERE chat_id = $1",
+            chat_id,
+            new_value,
+        )
+        return new_value
 
 
 async def replace_matches(pool: asyncpg.Pool, matches: list[dict]) -> int:
@@ -190,7 +243,6 @@ async def get_debug_stats(pool: asyncpg.Pool):
             """
         )
     return count, first_row, last_row, next_rows
-
 
 
 async def get_next_match(pool: asyncpg.Pool):
