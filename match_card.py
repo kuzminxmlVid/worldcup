@@ -8,10 +8,12 @@ import urllib.error
 
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
-FONT_REGULAR = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
-FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+ASSETS_DIR = Path(__file__).with_name("assets")
+FONTS_DIR = ASSETS_DIR / "fonts"
+FONT_REGULAR = FONTS_DIR / "DejaVuSans.ttf"
+FONT_BOLD = FONTS_DIR / "DejaVuSans-Bold.ttf"
 
-LOCAL_FLAGS_DIR = Path(__file__).with_name("assets") / "flags"
+LOCAL_FLAGS_DIR = ASSETS_DIR / "flags"
 CACHE_FLAGS_DIR = Path(tempfile.gettempdir()) / "worldcup_flags_hd"
 
 TEAM_FLAG_CODES = {
@@ -66,11 +68,21 @@ TEAM_FLAG_CODES = {
 }
 
 
-def _font(path: str, size: int):
+def _font(path, size: int):
+    candidates = [path]
     try:
-        return ImageFont.truetype(path, size)
+        name = Path(path).name
+        candidates += [name, f"/usr/share/fonts/truetype/dejavu/{name}"]
     except Exception:
-        return ImageFont.load_default()
+        pass
+
+    for candidate in candidates:
+        try:
+            return ImageFont.truetype(str(candidate), size)
+        except Exception:
+            continue
+
+    return ImageFont.load_default()
 
 
 def _slug(name: str) -> str:

@@ -1,3 +1,9 @@
+Причина проблемы: на Railway не находился системный шрифт, поэтому Pillow падал в ImageFont.load_default(), и весь текст становился крошечным.
+
+Что делать:
+- замени match_card.py
+- добавь папку assets/fonts с двумя файлами шрифтов
+
 
 Patch with updated clean card.
 
