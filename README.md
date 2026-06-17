@@ -1,61 +1,69 @@
-# World Cup Telegram Bot
+# World Cup Telegram Bot — local schedule version
 
-Телеграм-бот для расписания матчей Чемпионата мира по футболу.
+Эта версия не ходит во внешние API.
 
-Источник данных: API-Football / API-Sports.
+Расписание лежит физически в репозитории:
 
-## Что умеет
+```text
+schedule.json
+```
 
-- `/start` — подписать чат на ежедневное расписание.
-- `/stop` — отписать чат.
-- `/today` — матчи сегодня.
-- `/tomorrow` — матчи завтра.
-- `/week` — матчи на 7 дней.
-- `/sync` — вручную обновить расписание из API.
-- Автоматически присылает расписание каждый день утром.
-- Напоминает о матче за 1 час.
-- Хранит данные в PostgreSQL.
+Бот при запуске читает этот файл, кладёт 104 матча в PostgreSQL и дальше работает из базы.
 
-## Переменные окружения
+## Команды
 
-Смотри `.env.example`.
+- `/start`
+- `/sync` — перечитать `schedule.json` и перезаписать матчи в Postgres.
+- `/source` — проверить, какой локальный файл читает бот и сколько матчей нашёл.
+- `/debug` — проверить базу и ближайшие матчи.
+- `/today`
+- `/tomorrow`
+- `/week`
+- `/stop`
 
-На Railway нужно добавить:
+## Railway переменные
+
+Нужны только:
 
 ```env
 BOT_TOKEN=
 DATABASE_URL=
-API_FOOTBALL_KEY=
-API_FOOTBALL_HOST=v3.football.api-sports.io
 APP_TZ=Europe/Moscow
 DAILY_HOUR=10
 DAILY_MINUTE=0
+MISE_PYTHON_GITHUB_ATTESTATIONS=false
 ```
 
-## Railway
+Больше не нужны:
 
-1. Создай репозиторий на GitHub.
-2. Залей туда эти файлы.
-3. В Railway создай New Project.
-4. Подключи GitHub repo.
-5. Добавь PostgreSQL.
-6. В сервисе бота добавь переменные окружения.
-7. `DATABASE_URL` возьми из Postgres-плагина Railway.
-8. Deploy.
-
-Railway запустит процесс из `Procfile`:
-
-```bash
-worker: python main.py
+```env
+API_FOOTBALL_KEY
+API_FOOTBALL_HOST
+SCHEDULE_SOURCE_URL
+SOURCE_TZ
 ```
 
-## API-Football
+## Проверка после деплоя
 
-Для ЧМ-2026 используются:
+В Telegram:
 
-```txt
-GET /fixtures?league=1&season=2026
-GET /standings?league=1&season=2026
+```text
+/source
+/sync
+/debug
+/week
 ```
 
-`league=1`, `season=2026`.
+Нормально:
+
+```text
+/source -> Матчей в файле: 104
+/sync -> Готово. Загружено матчей: 104.
+/debug -> Матчей в базе: 104
+```
+
+## Важно
+
+Если в Railway снова будет ошибка `API_FOOTBALL_KEY is not set`, значит Railway запускает старый `config.py`.
+
+В новой версии в коде вообще нет слова `API_FOOTBALL_KEY`.

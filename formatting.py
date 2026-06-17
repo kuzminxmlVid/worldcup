@@ -13,22 +13,19 @@ def match_line(row, tz: ZoneInfo) -> str:
     kickoff = row["kickoff_utc"].astimezone(tz)
     date_time = kickoff.strftime("%d.%m, %H:%M")
 
-    group = row["group_name"] or row["round_name"] or "Группа не указана"
+    group_or_round = row["group_name"] or row["round_name"] or "Стадия не указана"
 
     score = ""
     if row["home_goals"] is not None and row["away_goals"] is not None:
         score = f"  {row['home_goals']}:{row['away_goals']}"
 
-    place_parts = [p for p in [row["venue"], row["city"]] if p]
-    place = ""
-    if place_parts:
-        place = "\n" + ", ".join(place_parts)
+    venue = f"\n{row['venue']}" if row["venue"] else ""
 
     return (
         f"⚽️ {date_time}\n"
         f"{row['home_team']} — {row['away_team']}{score}\n"
-        f"{group}"
-        f"{place}"
+        f"{group_or_round}"
+        f"{venue}"
     )
 
 
@@ -42,11 +39,53 @@ def format_matches(title: str, rows, tz: ZoneInfo) -> str:
 
 def format_reminder(row, tz: ZoneInfo) -> str:
     kickoff = row["kickoff_utc"].astimezone(tz)
-    group = row["group_name"] or row["round_name"] or "Группа не указана"
+    group_or_round = row["group_name"] or row["round_name"] or "Стадия не указана"
 
     return (
         "🔔 Через час матч ЧМ\n\n"
         f"⚽️ {kickoff.strftime('%d.%m, %H:%M')}\n"
         f"{row['home_team']} — {row['away_team']}\n"
-        f"{group}"
+        f"{group_or_round}"
     )
+
+
+def format_debug(count, first_row, last_row, next_rows, tz: ZoneInfo) -> str:
+    lines = ["🧪 Debug", f"Матчей в базе: {count}"]
+
+    if first_row:
+        lines.append(f"Первый матч: {first_row['kickoff_utc'].astimezone(tz).strftime('%d.%m.%Y %H:%M')}")
+    if last_row:
+        lines.append(f"Последний матч: {last_row['kickoff_utc'].astimezone(tz).strftime('%d.%m.%Y %H:%M')}")
+
+    lines.append("")
+    if next_rows:
+        lines.append("Ближайшие матчи:")
+        for row in next_rows:
+            kickoff = row["kickoff_utc"].astimezone(tz).strftime("%d.%m %H:%M")
+            lines.append(f"{kickoff} — {row['home_team']} — {row['away_team']}")
+    else:
+        lines.append("Ближайших матчей после текущего времени нет.")
+
+    return "\n".join(lines)
+
+
+def split_telegram_text(text: str, limit: int = 3900) -> list[str]:
+    if len(text) <= limit:
+        return [text]
+
+    parts = []
+    current = ""
+
+    for block in text.split("\n\n"):
+        piece = block if not current else "\n\n" + block
+        if len(current) + len(piece) > limit:
+            if current:
+                parts.append(current)
+            current = block
+        else:
+            current += piece
+
+    if current:
+        parts.append(current)
+
+    return parts

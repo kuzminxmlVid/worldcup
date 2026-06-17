@@ -4,21 +4,13 @@ from datetime import datetime, timedelta, timezone
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 import db
-from api_football import ApiFootballClient, normalize_fixture
-from formatting import day_bounds_utc, format_matches, format_reminder
+from formatting import day_bounds_utc, format_matches, format_reminder, split_telegram_text
+from local_schedule import load_matches
 
 
-async def sync_fixtures(pool, api_client: ApiFootballClient) -> int:
-    group_map = await api_client.get_group_map()
-    fixtures = await api_client.get_fixtures()
-
-    count = 0
-    for item in fixtures:
-        match = normalize_fixture(item, group_map)
-        await db.upsert_match(pool, match)
-        count += 1
-
-    return count
+async def sync_fixtures(pool) -> int:
+    matches = load_matches()
+    return await db.replace_matches(pool, matches)
 
 
 async def send_daily_schedule(bot, pool, tz):
@@ -29,7 +21,8 @@ async def send_daily_schedule(bot, pool, tz):
     text = format_matches("🏆 Матчи ЧМ сегодня", rows, tz)
 
     for chat_id in await db.get_active_chats(pool):
-        await bot.send_message(chat_id, text)
+        for part in split_telegram_text(text):
+            await bot.send_message(chat_id, part)
 
 
 async def send_hour_reminders(bot, pool, tz):
@@ -50,14 +43,14 @@ async def send_hour_reminders(bot, pool, tz):
             await db.mark_reminder_sent(pool, row["fixture_id"], chat_id, "one_hour")
 
 
-def setup_scheduler(bot, pool, api_client, config) -> AsyncIOScheduler:
+def setup_scheduler(bot, pool, config) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone=config.app_tz)
 
     scheduler.add_job(
         sync_fixtures,
         "interval",
-        hours=6,
-        args=[pool, api_client],
+        hours=12,
+        args=[pool],
         id="sync_fixtures",
         replace_existing=True,
         max_instances=1,
