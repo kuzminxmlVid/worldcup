@@ -24,7 +24,7 @@ from match_card import build_match_card
 from scheduler import setup_scheduler, sync_fixtures
 
 
-VERSION = "local-schedule-2026-06-17-v7-wave-flags"
+VERSION = "local-schedule-2026-06-17-v8-flagcdn-hd-flat-flags"
 
 logging.basicConfig(level=logging.INFO)
 
