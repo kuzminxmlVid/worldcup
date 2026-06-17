@@ -218,3 +218,50 @@ def split_telegram_text(text: str, limit: int = 3900) -> list[str]:
         parts.append(current)
 
     return parts
+
+
+
+NOTE_MAX_LEN = 2000
+PREDICTION_MAX_LEN = 200
+
+
+def format_user_match_data(row, user_data, tz: ZoneInfo) -> str:
+    kickoff = row["kickoff_utc"].astimezone(tz)
+    prediction = None
+    note = None
+
+    if user_data:
+        prediction = user_data["prediction"]
+        note = user_data["note"]
+
+    lines = [
+        "🧾 Мои данные по матчу",
+        "",
+        f"📅 {kickoff.strftime('%d.%m.%Y')}",
+        f"🕒 {kickoff.strftime('%H:%M')}",
+        f"{team_with_flag(row['home_team'])} — {team_with_flag(row['away_team'])}",
+        "",
+        "🔮 Прогноз:",
+        prediction if prediction else "Пока не указан.",
+        "",
+        "📝 Заметка:",
+        note if note else "Пока не добавлена.",
+    ]
+
+    return "\n".join(lines)
+
+
+def format_note_too_long(length: int) -> str:
+    return (
+        f"Заметка слишком длинная: {length} символов.\n\n"
+        f"Максимум: {NOTE_MAX_LEN} символов.\n"
+        "Сократи текст и пришли ещё раз. Я пока ничего не сохранил."
+    )
+
+
+def format_prediction_too_long(length: int) -> str:
+    return (
+        f"Прогноз слишком длинный: {length} символов.\n\n"
+        f"Максимум: {PREDICTION_MAX_LEN} символов.\n"
+        "Пришли короткий прогноз, например: 2:1 или Portugal 2:1 DR Congo."
+    )

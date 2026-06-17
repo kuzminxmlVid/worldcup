@@ -35,3 +35,35 @@ def nav_inline_keyboard(reminders_enabled: bool | None = None) -> InlineKeyboard
             ],
         ]
     )
+
+
+def match_inline_keyboard(
+    fixture_id: int,
+    reminders_enabled: bool | None = None,
+    has_prediction: bool = False,
+    has_note: bool = False,
+) -> InlineKeyboardMarkup:
+    alerts_label = "Автопост: вкл" if reminders_enabled else "Автопост: выкл"
+    prediction_label = "Изменить прогноз" if has_prediction else "Сделать прогноз"
+    note_label = "Изменить заметку" if has_note else "Добавить заметку"
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=prediction_label, callback_data=f"match:prediction:{fixture_id}"),
+                InlineKeyboardButton(text=note_label, callback_data=f"match:note:{fixture_id}"),
+            ],
+            [
+                InlineKeyboardButton(text="Показать мои данные", callback_data=f"match:show:{fixture_id}"),
+                InlineKeyboardButton(text="Очистить", callback_data=f"match:clear:{fixture_id}"),
+            ],
+            [
+                InlineKeyboardButton(text="Сегодня", callback_data="nav:today"),
+                InlineKeyboardButton(text="Следующий", callback_data="nav:next"),
+            ],
+            [
+                InlineKeyboardButton(text=alerts_label, callback_data="nav:alerts_toggle"),
+                InlineKeyboardButton(text="Меню", callback_data="nav:menu"),
+            ],
+        ]
+    )

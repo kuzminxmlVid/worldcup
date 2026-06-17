@@ -32,6 +32,25 @@ CREATE TABLE IF NOT EXISTS sent_reminders (
     sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (fixture_id, chat_id, reminder_type)
 );
+
+CREATE TABLE IF NOT EXISTS user_match_data (
+    chat_id BIGINT NOT NULL,
+    user_id BIGINT NOT NULL,
+    fixture_id BIGINT NOT NULL,
+    prediction TEXT,
+    note TEXT,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (chat_id, user_id, fixture_id)
+);
+
+CREATE TABLE IF NOT EXISTS pending_inputs (
+    chat_id BIGINT NOT NULL,
+    user_id BIGINT NOT NULL,
+    fixture_id BIGINT NOT NULL,
+    action TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (chat_id, user_id)
+);
 """
 
 
@@ -181,6 +200,18 @@ async def get_matches_between(pool: asyncpg.Pool, start_utc, end_utc):
         )
 
 
+async def get_match_by_id(pool: asyncpg.Pool, fixture_id: int):
+    async with pool.acquire() as conn:
+        return await conn.fetchrow(
+            """
+            SELECT *
+            FROM matches
+            WHERE fixture_id = $1
+            """,
+            fixture_id,
+        )
+
+
 async def get_upcoming_for_reminder(pool: asyncpg.Pool, start_utc, end_utc):
     async with pool.acquire() as conn:
         return await conn.fetch(
@@ -255,4 +286,114 @@ async def get_next_match(pool: asyncpg.Pool):
             ORDER BY kickoff_utc ASC
             LIMIT 1
             """
+        )
+
+
+async def get_user_match_data(pool: asyncpg.Pool, chat_id: int, user_id: int, fixture_id: int):
+    async with pool.acquire() as conn:
+        return await conn.fetchrow(
+            """
+            SELECT prediction, note, updated_at
+            FROM user_match_data
+            WHERE chat_id = $1
+              AND user_id = $2
+              AND fixture_id = $3
+            """,
+            chat_id,
+            user_id,
+            fixture_id,
+        )
+
+
+async def save_prediction(pool: asyncpg.Pool, chat_id: int, user_id: int, fixture_id: int, prediction: str) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO user_match_data(chat_id, user_id, fixture_id, prediction, updated_at)
+            VALUES($1, $2, $3, $4, NOW())
+            ON CONFLICT(chat_id, user_id, fixture_id) DO UPDATE SET
+                prediction = EXCLUDED.prediction,
+                updated_at = NOW()
+            """,
+            chat_id,
+            user_id,
+            fixture_id,
+            prediction,
+        )
+
+
+async def save_note(pool: asyncpg.Pool, chat_id: int, user_id: int, fixture_id: int, note: str) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO user_match_data(chat_id, user_id, fixture_id, note, updated_at)
+            VALUES($1, $2, $3, $4, NOW())
+            ON CONFLICT(chat_id, user_id, fixture_id) DO UPDATE SET
+                note = EXCLUDED.note,
+                updated_at = NOW()
+            """,
+            chat_id,
+            user_id,
+            fixture_id,
+            note,
+        )
+
+
+async def clear_user_match_data(pool: asyncpg.Pool, chat_id: int, user_id: int, fixture_id: int) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            DELETE FROM user_match_data
+            WHERE chat_id = $1
+              AND user_id = $2
+              AND fixture_id = $3
+            """,
+            chat_id,
+            user_id,
+            fixture_id,
+        )
+
+
+async def set_pending_input(pool: asyncpg.Pool, chat_id: int, user_id: int, fixture_id: int, action: str) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO pending_inputs(chat_id, user_id, fixture_id, action, created_at)
+            VALUES($1, $2, $3, $4, NOW())
+            ON CONFLICT(chat_id, user_id) DO UPDATE SET
+                fixture_id = EXCLUDED.fixture_id,
+                action = EXCLUDED.action,
+                created_at = NOW()
+            """,
+            chat_id,
+            user_id,
+            fixture_id,
+            action,
+        )
+
+
+async def get_pending_input(pool: asyncpg.Pool, chat_id: int, user_id: int):
+    async with pool.acquire() as conn:
+        return await conn.fetchrow(
+            """
+            SELECT fixture_id, action, created_at
+            FROM pending_inputs
+            WHERE chat_id = $1
+              AND user_id = $2
+            """,
+            chat_id,
+            user_id,
+        )
+
+
+async def clear_pending_input(pool: asyncpg.Pool, chat_id: int, user_id: int) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            DELETE FROM pending_inputs
+            WHERE chat_id = $1
+              AND user_id = $2
+            """,
+            chat_id,
+            user_id,
         )
