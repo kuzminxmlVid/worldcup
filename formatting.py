@@ -110,28 +110,18 @@ def format_single_match(row, tz: ZoneInfo, title: str = "⏭️ Следующи
     kickoff = row["kickoff_utc"].astimezone(tz)
     group_or_round = row["group_name"] or row["round_name"] or "Стадия не указана"
 
-    score = ""
-    if row["home_goals"] is not None and row["away_goals"] is not None:
-        score = f"\nСчёт: {row['home_goals']}:{row['away_goals']}"
-
     lines = [
         title,
         "",
         f"📅 {kickoff.strftime('%d.%m.%Y')}",
         f"🕒 {kickoff.strftime('%H:%M')}",
         "",
-        f"{team_with_flag(row['home_team'])}",
-        "—",
-        f"{team_with_flag(row['away_team'])}",
-        "",
+        f"{team_with_flag(row['home_team'])} — {team_with_flag(row['away_team'])}",
         stage_with_icon(group_or_round),
     ]
 
     if row["venue"]:
         lines.append(f"🏟️ {row['venue']}")
-
-    if score:
-        lines.append(score)
 
     return "\n".join(lines)
 
@@ -186,6 +176,18 @@ def format_debug(count, first_row, last_row, next_rows, tz: ZoneInfo) -> str:
         lines.append("Ближайших матчей после текущего времени нет.")
 
     return "\n".join(lines)
+
+
+def help_text() -> str:
+    return (
+        "Что умею:\n"
+        "• Сегодня\n"
+        "• Завтра\n"
+        "• Следующий матч с карточкой\n"
+        "• Расписание на 7 дней\n"
+        "• Обновить локальное расписание\n\n"
+        "Можно пользоваться кнопками снизу или командами /today /tomorrow /next /week /sync"
+    )
 
 
 def split_telegram_text(text: str, limit: int = 3900) -> list[str]:

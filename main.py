@@ -1,20 +1,22 @@
 import asyncio
 import logging
+from pathlib import Path
 from datetime import datetime, timedelta
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import Message, CallbackQuery, FSInputFile
 
 import db
 from config import load_config
-from formatting import day_bounds_utc, format_matches, format_debug, format_single_match, split_telegram_text
-from keyboards import main_keyboard
+from formatting import day_bounds_utc, format_matches, format_debug, format_single_match, split_telegram_text, help_text
+from keyboards import main_keyboard, nav_inline_keyboard
 from local_schedule import load_matches, SCHEDULE_PATH
+from match_card import build_match_card
 from scheduler import setup_scheduler, sync_fixtures
 
 
-VERSION = "local-schedule-2026-06-17-v3-next-match"
+VERSION = "local-schedule-2026-06-17-v4-illustrated-ux"
 
 logging.basicConfig(level=logging.INFO)
 
@@ -26,8 +28,10 @@ pool = None
 
 
 async def send_text(message: Message, text: str):
-    for part in split_telegram_text(text):
-        await message.answer(part, reply_markup=main_keyboard())
+    parts = split_telegram_text(text)
+    for i, part in enumerate(parts):
+        markup = nav_inline_keyboard() if i == len(parts) - 1 else None
+        await message.answer(part, reply_markup=markup)
 
 
 async def send_today_text(message: Message):
@@ -56,29 +60,52 @@ async def send_next_match_text(message: Message):
     row = await db.get_next_match(pool)
 
     if not row:
-        await message.answer("Ближайших матчей после текущего времени нет.", reply_markup=main_keyboard())
+        await message.answer("Ближайших матчей после текущего времени нет.", reply_markup=nav_inline_keyboard())
         return
 
-    await message.answer(format_single_match(row, config.app_tz), reply_markup=main_keyboard())
+    caption = format_single_match(row, config.app_tz)
+    card_path = build_match_card(row, config.app_tz)
+    try:
+        await message.answer_photo(FSInputFile(card_path), caption=caption, reply_markup=nav_inline_keyboard())
+    finally:
+        try:
+            Path(card_path).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+async def send_source_text(message: Message):
+    try:
+        matches = load_matches()
+        await message.answer(
+            f"Источник: локальный файл\n"
+            f"Файл: {SCHEDULE_PATH.name}\n"
+            f"Версия кода: {VERSION}\n"
+            f"Матчей в файле: {len(matches)}",
+            reply_markup=nav_inline_keyboard(),
+        )
+    except Exception as e:
+        await message.answer(f"Не получилось прочитать schedule.json: {e}", reply_markup=nav_inline_keyboard())
+
+
+async def send_debug_text(message: Message):
+    count, first_row, last_row, next_rows = await db.get_debug_stats(pool)
+    await message.answer(format_debug(count, first_row, last_row, next_rows, config.app_tz), reply_markup=nav_inline_keyboard())
 
 
 @dp.message(Command("start"))
 async def start(message: Message):
     await db.add_chat(pool, message.chat.id)
     await message.answer(
-        "Готово. Я буду присылать расписание матчей ЧМ.\n\n"
-        "Теперь можно пользоваться кнопками снизу или командами.\n\n"
-        "Команды:\n"
-        "/today — матчи сегодня\n"
-        "/tomorrow — матчи завтра\n"
-        "/week — матчи на 7 дней\n"
-        "/next — следующий матч отдельным сообщением\n"
-        "/sync — обновить расписание из локального schedule.json\n"
-        "/debug — проверить базу\n"
-        "/source — проверить локальный файл\n"
-        "/stop — отписаться",
+        "Готово. Бот запущен.\n\n" + help_text(),
         reply_markup=main_keyboard(),
     )
+
+
+@dp.message(Command("menu"))
+@dp.message(F.text == "Меню")
+async def menu(message: Message):
+    await message.answer(help_text(), reply_markup=main_keyboard())
 
 
 @dp.message(Command("stop"))
@@ -92,10 +119,10 @@ async def sync(message: Message):
     await message.answer("Обновляю расписание из локального файла...")
     try:
         count = await sync_fixtures(pool)
-        await message.answer(f"Готово. Загружено матчей: {count}.", reply_markup=main_keyboard())
+        await message.answer(f"Готово. Загружено матчей: {count}.", reply_markup=nav_inline_keyboard())
     except Exception as e:
         logging.exception("Sync failed")
-        await message.answer(f"Не получилось обновить расписание: {e}", reply_markup=main_keyboard())
+        await message.answer(f"Не получилось обновить расписание: {e}", reply_markup=nav_inline_keyboard())
 
 
 @dp.message(Command("today"))
@@ -120,23 +147,12 @@ async def next_match(message: Message):
 
 @dp.message(Command("debug"))
 async def debug(message: Message):
-    count, first_row, last_row, next_rows = await db.get_debug_stats(pool)
-    await message.answer(format_debug(count, first_row, last_row, next_rows, config.app_tz), reply_markup=main_keyboard())
+    await send_debug_text(message)
 
 
 @dp.message(Command("source"))
 async def source(message: Message):
-    try:
-        matches = load_matches()
-        await message.answer(
-            f"Источник: локальный файл\n"
-            f"Файл: {SCHEDULE_PATH.name}\n"
-            f"Версия кода: {VERSION}\n"
-            f"Матчей в файле: {len(matches)}",
-            reply_markup=main_keyboard(),
-        )
-    except Exception as e:
-        await message.answer(f"Не получилось прочитать schedule.json: {e}", reply_markup=main_keyboard())
+    await send_source_text(message)
 
 
 @dp.message(F.text == "Сегодня")
@@ -164,14 +180,23 @@ async def button_sync(message: Message):
     await sync(message)
 
 
-@dp.message(F.text == "Источник")
-async def button_source(message: Message):
-    await source(message)
+@dp.callback_query(F.data.startswith("nav:"))
+async def nav_callback(callback: CallbackQuery):
+    action = callback.data.split(":", 1)[1]
+    await callback.answer()
 
-
-@dp.message(F.text == "Debug")
-async def button_debug(message: Message):
-    await debug(message)
+    if action == "today":
+        await send_today_text(callback.message)
+    elif action == "tomorrow":
+        await send_tomorrow_text(callback.message)
+    elif action == "next":
+        await send_next_match_text(callback.message)
+    elif action == "week":
+        await send_week_text(callback.message)
+    elif action == "sync":
+        await sync(callback.message)
+    elif action == "menu":
+        await menu(callback.message)
 
 
 async def main():
