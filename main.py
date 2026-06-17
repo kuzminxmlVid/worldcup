@@ -1,11 +1,12 @@
 import asyncio
 import logging
+import re
 from pathlib import Path
 from datetime import datetime, timedelta
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
-from aiogram.types import Message, CallbackQuery, FSInputFile
+from aiogram.types import Message, CallbackQuery, FSInputFile, ForceReply
 
 import db
 from config import load_config
@@ -27,7 +28,7 @@ from local_schedule import load_matches, SCHEDULE_PATH
 from match_card import build_match_card
 from scheduler import setup_scheduler, sync_fixtures
 
-VERSION = "local-schedule-2026-06-17-v13-card-polish-userfix"
+VERSION = "local-schedule-2026-06-17-v14-pending-fix-force-reply"
 
 logging.basicConfig(level=logging.INFO)
 config = load_config()
@@ -35,9 +36,29 @@ bot = Bot(token=config.bot_token)
 dp = Dispatcher()
 pool = None
 
+REPLY_MARKER_RE = re.compile(r"Код:\s*(prediction|note):(\d+):(\d+)")
+
 
 def user_id_from_message(message: Message) -> int:
     return message.from_user.id if message.from_user else message.chat.id
+
+
+def parse_reply_marker(message: Message):
+    if not message.reply_to_message or not message.reply_to_message.text:
+        return None
+
+    match = REPLY_MARKER_RE.search(message.reply_to_message.text)
+    if not match:
+        return None
+
+    action = match.group(1)
+    fixture_id = int(match.group(2))
+    source_message_id = int(match.group(3))
+    return {
+        "action": action,
+        "fixture_id": fixture_id,
+        "source_message_id": source_message_id if source_message_id else None,
+    }
 
 
 async def reminders_enabled_for(chat_id: int) -> bool:
@@ -75,8 +96,17 @@ async def send_week_text(message: Message):
     await send_text(message, format_matches("Матчи ЧМ на 7 дней", rows, config.app_tz))
 
 
-async def send_match_personal_post(message: Message, row, source_message_id: int | None = None):
-    user_id = user_id_from_message(message)
+async def send_match_personal_post(
+    message: Message,
+    row,
+    source_message_id: int | None = None,
+    user_id: int | None = None,
+):
+    if not row:
+        await message.answer("Не нашёл этот матч в базе. Попробуй /sync и потом /next.")
+        return
+
+    user_id = user_id or user_id_from_message(message)
     enabled = await reminders_enabled_for(message.chat.id)
     user_data = await db.get_user_match_data(pool, message.chat.id, user_id, row["fixture_id"])
     text = format_user_match_data(row, user_data, config.app_tz)
@@ -86,12 +116,19 @@ async def send_match_personal_post(message: Message, row, source_message_id: int
         has_prediction=bool(user_data and user_data["prediction"]),
         has_note=bool(user_data and user_data["note"]),
     )
+
     if source_message_id:
         try:
-            await bot.edit_message_text(chat_id=message.chat.id, message_id=source_message_id, text=text, reply_markup=markup)
+            await bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=source_message_id,
+                text=text,
+                reply_markup=markup,
+            )
             return
         except Exception:
-            pass
+            logging.exception("Could not edit personal match post")
+
     await message.answer(text, reply_markup=markup)
 
 
@@ -110,7 +147,7 @@ async def send_match_by_id(message: Message, fixture_id: int):
         except Exception:
             pass
 
-    await send_match_personal_post(message, row)
+    await send_match_personal_post(message, row, user_id=user_id_from_message(message))
 
 
 async def send_next_match_text(message: Message):
@@ -150,11 +187,23 @@ async def prompt_prediction(message: Message, fixture_id: int, user_id: int, sou
     if not row:
         await message.answer("Не нашёл этот матч в базе.")
         return
+
     await db.set_pending_input(pool, message.chat.id, user_id, fixture_id, "prediction", source_message_id)
+    logging.info(
+        "Pending input set: chat_id=%s user_id=%s fixture_id=%s action=prediction source_message_id=%s",
+        message.chat.id,
+        user_id,
+        fixture_id,
+        source_message_id,
+    )
+
+    marker = f"prediction:{fixture_id}:{source_message_id or 0}"
     await message.answer(
         "Пришли прогноз одним сообщением.\n\n"
         "Например: 2:1 или Portugal 2:1 DR Congo.\n"
-        f"Максимум: {PREDICTION_MAX_LEN} символов."
+        f"Максимум: {PREDICTION_MAX_LEN} символов.\n\n"
+        f"Код: {marker}",
+        reply_markup=ForceReply(selective=True, input_field_placeholder="Напиши прогноз"),
     )
 
 
@@ -163,11 +212,23 @@ async def prompt_note(message: Message, fixture_id: int, user_id: int, source_me
     if not row:
         await message.answer("Не нашёл этот матч в базе.")
         return
+
     await db.set_pending_input(pool, message.chat.id, user_id, fixture_id, "note", source_message_id)
+    logging.info(
+        "Pending input set: chat_id=%s user_id=%s fixture_id=%s action=note source_message_id=%s",
+        message.chat.id,
+        user_id,
+        fixture_id,
+        source_message_id,
+    )
+
+    marker = f"note:{fixture_id}:{source_message_id or 0}"
     await message.answer(
         "Пришли заметку по матчу одним сообщением.\n\n"
         f"Максимум: {NOTE_MAX_LEN} символов.\n"
-        "Если текст будет длиннее, я не сохраню его и попрошу сократить."
+        "Если текст будет длиннее, я не сохраню его и попрошу сократить.\n\n"
+        f"Код: {marker}",
+        reply_markup=ForceReply(selective=True, input_field_placeholder="Напиши заметку"),
     )
 
 
@@ -177,12 +238,38 @@ async def handle_pending_text(message: Message) -> bool:
 
     user_id = user_id_from_message(message)
     pending = await db.get_pending_input(pool, message.chat.id, user_id)
-    if not pending:
-        return False
+    reply_marker = None
 
-    fixture_id = int(pending["fixture_id"])
-    action = pending["action"]
-    source_message_id = pending["source_message_id"]
+    if pending:
+        fixture_id = int(pending["fixture_id"])
+        action = pending["action"]
+        source_message_id = pending["source_message_id"]
+        logging.info(
+            "Pending input found in DB: chat_id=%s user_id=%s fixture_id=%s action=%s source_message_id=%s",
+            message.chat.id,
+            user_id,
+            fixture_id,
+            action,
+            source_message_id,
+        )
+    else:
+        reply_marker = parse_reply_marker(message)
+        if not reply_marker:
+            logging.info("No pending input found: chat_id=%s user_id=%s", message.chat.id, user_id)
+            return False
+
+        fixture_id = reply_marker["fixture_id"]
+        action = reply_marker["action"]
+        source_message_id = reply_marker["source_message_id"]
+        logging.info(
+            "Pending input recovered from reply marker: chat_id=%s user_id=%s fixture_id=%s action=%s source_message_id=%s",
+            message.chat.id,
+            user_id,
+            fixture_id,
+            action,
+            source_message_id,
+        )
+
     text = message.text.strip()
 
     if action == "prediction":
@@ -192,10 +279,11 @@ async def handle_pending_text(message: Message) -> bool:
         if len(text) > PREDICTION_MAX_LEN:
             await message.answer(format_prediction_too_long(len(text)))
             return True
+
         await db.save_prediction(pool, message.chat.id, user_id, fixture_id, text)
         await db.clear_pending_input(pool, message.chat.id, user_id)
         row = await db.get_match_by_id(pool, fixture_id)
-        await send_match_personal_post(message, row, source_message_id)
+        await send_match_personal_post(message, row, source_message_id, user_id=user_id)
         return True
 
     if action == "note":
@@ -205,10 +293,11 @@ async def handle_pending_text(message: Message) -> bool:
         if len(text) > NOTE_MAX_LEN:
             await message.answer(format_note_too_long(len(text)))
             return True
+
         await db.save_note(pool, message.chat.id, user_id, fixture_id, text)
         await db.clear_pending_input(pool, message.chat.id, user_id)
         row = await db.get_match_by_id(pool, fixture_id)
-        await send_match_personal_post(message, row, source_message_id)
+        await send_match_personal_post(message, row, source_message_id, user_id=user_id)
         return True
 
     await db.clear_pending_input(pool, message.chat.id, user_id)
@@ -346,26 +435,29 @@ async def match_callback(callback: CallbackQuery):
     if len(parts) != 3:
         await callback.answer("Не понял действие.")
         return
+
     action = parts[1]
     fixture_id = int(parts[2])
     source_message_id = callback.message.message_id if callback.message else None
+    user_id = callback.from_user.id
     await callback.answer()
+
     if action == "prediction":
-        await prompt_prediction(callback.message, fixture_id, callback.from_user.id, source_message_id)
+        await prompt_prediction(callback.message, fixture_id, user_id, source_message_id)
     elif action == "note":
-        await prompt_note(callback.message, fixture_id, callback.from_user.id, source_message_id)
+        await prompt_note(callback.message, fixture_id, user_id, source_message_id)
     elif action == "show":
         row = await db.get_match_by_id(pool, fixture_id)
         if row:
-            await send_match_personal_post(callback.message, row, source_message_id)
+            await send_match_personal_post(callback.message, row, source_message_id, user_id=user_id)
         else:
             await callback.message.answer("Не нашёл этот матч в базе.")
     elif action == "clear":
-        await db.clear_user_match_data(pool, callback.message.chat.id, callback.from_user.id, fixture_id)
-        await db.clear_pending_input(pool, callback.message.chat.id, callback.from_user.id)
+        await db.clear_user_match_data(pool, callback.message.chat.id, user_id, fixture_id)
+        await db.clear_pending_input(pool, callback.message.chat.id, user_id)
         row = await db.get_match_by_id(pool, fixture_id)
         if row:
-            await send_match_personal_post(callback.message, row, source_message_id)
+            await send_match_personal_post(callback.message, row, source_message_id, user_id=user_id)
 
 
 @dp.message(F.text)

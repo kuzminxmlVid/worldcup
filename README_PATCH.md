@@ -1,19 +1,25 @@
-Patch: fix prediction/note + polished match card
+Patch: prediction/note pending input fix
 
-Replace these files:
+Replace only this file:
 - main.py
-- match_card.py
 
-Also keep these font files in the repo:
-- assets/fonts/DejaVuSans.ttf
-- assets/fonts/DejaVuSans-Bold.ttf
+What changed:
+- prediction and note are now stored under the real Telegram user id
+- replies use ForceReply, so Telegram clearly ties the next user message to the prompt
+- if the database pending state is not found, bot can recover the action from the reply marker
+- added logging for pending input set/found/recovered
+- Show/Clear buttons now use the real callback user id
 
-Fixes:
-- prediction and note now save correctly
-- the pending input is stored under the real Telegram user id
-- match card is redesigned closer to the premium reference
-- rectangular flags
-- no emoji inside the generated image
+After redeploy:
+1. Press /start
+2. Press /next
+3. Press Сделать прогноз
+4. Reply to the bot prompt or just type the forecast
+5. Press Добавить заметку
+6. Reply to the bot prompt or just type the note
 
-Prediction and note remain in the separate text post.
-The match image contains only match data.
+If it still fails, send logs containing lines with:
+- Pending input set
+- Pending input found in DB
+- Pending input recovered from reply marker
+- No pending input found
