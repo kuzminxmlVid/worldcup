@@ -27,7 +27,7 @@ from local_schedule import load_matches, SCHEDULE_PATH
 from match_card import build_match_card
 from scheduler import setup_scheduler, sync_fixtures
 
-VERSION = "local-schedule-2026-06-17-v12-clean-card-rect-flags"
+VERSION = "local-schedule-2026-06-17-v13-card-polish-userfix"
 
 logging.basicConfig(level=logging.INFO)
 config = load_config()
@@ -145,12 +145,12 @@ async def toggle_alerts(message: Message):
     await message.answer(format_alerts_status(new_value), reply_markup=nav_inline_keyboard(new_value))
 
 
-async def prompt_prediction(message: Message, fixture_id: int, source_message_id: int | None = None):
+async def prompt_prediction(message: Message, fixture_id: int, user_id: int, source_message_id: int | None = None):
     row = await db.get_match_by_id(pool, fixture_id)
     if not row:
         await message.answer("Не нашёл этот матч в базе.")
         return
-    await db.set_pending_input(pool, message.chat.id, user_id_from_message(message), fixture_id, "prediction", source_message_id)
+    await db.set_pending_input(pool, message.chat.id, user_id, fixture_id, "prediction", source_message_id)
     await message.answer(
         "Пришли прогноз одним сообщением.\n\n"
         "Например: 2:1 или Portugal 2:1 DR Congo.\n"
@@ -158,12 +158,12 @@ async def prompt_prediction(message: Message, fixture_id: int, source_message_id
     )
 
 
-async def prompt_note(message: Message, fixture_id: int, source_message_id: int | None = None):
+async def prompt_note(message: Message, fixture_id: int, user_id: int, source_message_id: int | None = None):
     row = await db.get_match_by_id(pool, fixture_id)
     if not row:
         await message.answer("Не нашёл этот матч в базе.")
         return
-    await db.set_pending_input(pool, message.chat.id, user_id_from_message(message), fixture_id, "note", source_message_id)
+    await db.set_pending_input(pool, message.chat.id, user_id, fixture_id, "note", source_message_id)
     await message.answer(
         "Пришли заметку по матчу одним сообщением.\n\n"
         f"Максимум: {NOTE_MAX_LEN} символов.\n"
@@ -351,9 +351,9 @@ async def match_callback(callback: CallbackQuery):
     source_message_id = callback.message.message_id if callback.message else None
     await callback.answer()
     if action == "prediction":
-        await prompt_prediction(callback.message, fixture_id, source_message_id)
+        await prompt_prediction(callback.message, fixture_id, callback.from_user.id, source_message_id)
     elif action == "note":
-        await prompt_note(callback.message, fixture_id, source_message_id)
+        await prompt_note(callback.message, fixture_id, callback.from_user.id, source_message_id)
     elif action == "show":
         row = await db.get_match_by_id(pool, fixture_id)
         if row:
