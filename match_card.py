@@ -1,3 +1,4 @@
+
 from pathlib import Path
 from zoneinfo import ZoneInfo
 import re
@@ -69,10 +70,7 @@ def _font(path: str, size: int):
     try:
         return ImageFont.truetype(path, size)
     except Exception:
-        try:
-            return ImageFont.load_default(size=size)
-        except TypeError:
-            return ImageFont.load_default()
+        return ImageFont.load_default()
 
 
 def _slug(name: str) -> str:
@@ -103,7 +101,7 @@ def _safe_group_label(value: str | None) -> str:
     return str(value).upper()
 
 
-def _fit_text(draw, text: str, max_width: int, start_size: int, min_size: int = 32):
+def _fit_text(draw, text: str, max_width: int, start_size: int, min_size: int = 28):
     size = start_size
     while size >= min_size:
         font = _font(FONT_BOLD, size)
@@ -120,7 +118,6 @@ def _crop_cover(img: Image.Image, target_w: int, target_h: int) -> Image.Image:
     new_w = int(src_w * scale)
     new_h = int(src_h * scale)
     img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
-
     left = (new_w - target_w) // 2
     top = (new_h - target_h) // 2
     return img.crop((left, top, left + target_w, top + target_h))
@@ -135,296 +132,210 @@ def _local_flag_path(team_name: str) -> Path | None:
 
 def _download_flag(team_name: str) -> Path | None:
     CACHE_FLAGS_DIR.mkdir(parents=True, exist_ok=True)
-
     codes = TEAM_FLAG_CODES.get(team_name, [])
     if not codes:
         return None
 
     for code in codes:
         cache_path = CACHE_FLAGS_DIR / f"{_slug(team_name)}_{code}.png"
-
         if cache_path.exists() and cache_path.stat().st_size > 1000:
             return cache_path
-
         urls = [
             f"https://flagcdn.com/w640/{code}.png",
             f"https://flagcdn.com/w320/{code}.png",
         ]
-
         for url in urls:
             try:
-                req = urllib.request.Request(
-                    url,
-                    headers={"User-Agent": "worldcup-telegram-bot/1.0"},
-                )
+                req = urllib.request.Request(url, headers={"User-Agent": "worldcup-telegram-bot/1.0"})
                 with urllib.request.urlopen(req, timeout=8) as response:
                     data = response.read()
-
                 if len(data) > 1000:
                     cache_path.write_bytes(data)
                     return cache_path
             except (urllib.error.URLError, TimeoutError, OSError):
                 continue
-
     return None
 
 
 def _flag_path(team_name: str) -> Path | None:
-    # Сначала пробуем нормальный флаг из CDN-кэша.
-    downloaded = _download_flag(team_name)
-    if downloaded:
-        return downloaded
-
-    # Если Railway/сеть временно тупит, используем локальный fallback из assets/flags.
-    return _local_flag_path(team_name)
+    return _download_flag(team_name) or _local_flag_path(team_name)
 
 
-def _draw_flag_image(img: Image.Image, team_name: str, box: tuple[int, int, int, int]):
+def _rounded_mask(size, radius):
+    mask = Image.new("L", size, 0)
+    d = ImageDraw.Draw(mask)
+    d.rounded_rectangle((0, 0, size[0], size[1]), radius=radius, fill=255)
+    return mask
+
+
+def _draw_flag_image(base_img: Image.Image, team_name: str, box: tuple[int, int, int, int], border_color=(230, 235, 244, 255)):
     path = _flag_path(team_name)
-
     x1, y1, x2, y2 = box
-    target_w = x2 - x1
-    target_h = y2 - y1
+    w, h = x2 - x1, y2 - y1
 
-    # shadow
-    shadow = Image.new("RGBA", (target_w + 24, target_h + 24), (0, 0, 0, 0))
+    shadow = Image.new("RGBA", (w + 24, h + 24), (0, 0, 0, 0))
     sd = ImageDraw.Draw(shadow)
-    sd.rounded_rectangle((12, 12, target_w + 12, target_h + 12), radius=18, fill=(0, 0, 0, 140))
+    sd.rounded_rectangle((12, 12, w + 12, h + 12), radius=18, fill=(0, 0, 0, 140))
     shadow = shadow.filter(ImageFilter.GaussianBlur(10))
-    img.alpha_composite(shadow, (x1 - 12, y1 - 12))
+    base_img.alpha_composite(shadow, (x1 - 12, y1 - 12))
 
-    flag_canvas = Image.new("RGBA", (target_w, target_h), (0, 0, 0, 0))
-    mask = Image.new("L", (target_w, target_h), 0)
-    md = ImageDraw.Draw(mask)
-    md.rounded_rectangle((0, 0, target_w, target_h), radius=18, fill=255)
+    canvas = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    mask = _rounded_mask((w, h), 18)
 
     if path and path.exists():
         flag = Image.open(path)
-        flag = _crop_cover(flag, target_w, target_h).convert("RGBA")
-        flag_canvas.alpha_composite(flag)
-        flag_canvas.putalpha(mask)
+        flag = _crop_cover(flag, w, h).convert("RGBA")
+        canvas.alpha_composite(flag)
+        canvas.putalpha(mask)
     else:
-        d = ImageDraw.Draw(flag_canvas)
-        d.rounded_rectangle((0, 0, target_w, target_h), radius=18, fill=(35, 45, 65, 255))
+        cd = ImageDraw.Draw(canvas)
+        cd.rounded_rectangle((0, 0, w, h), radius=18, fill=(40, 53, 80, 255))
         initials = "".join(word[0] for word in team_name.split()[:2]).upper()
-        f = _font(FONT_BOLD, 50)
-        tw = d.textlength(initials, font=f)
-        d.text(((target_w - tw) / 2, target_h / 2 - 28), initials, font=f, fill=(255, 255, 255, 255))
-        flag_canvas.putalpha(mask)
+        f = _font(FONT_BOLD, min(58, max(40, w // 5)))
+        tw = cd.textlength(initials, font=f)
+        cd.text(((w - tw) / 2, h / 2 - 26), initials, font=f, fill=(255, 255, 255, 255))
+        canvas.putalpha(mask)
 
-    img.alpha_composite(flag_canvas, (x1, y1))
-
-    d = ImageDraw.Draw(img)
-    d.rounded_rectangle((x1, y1, x2, y2), radius=18, outline=(235, 240, 248, 230), width=3)
+    base_img.alpha_composite(canvas, (x1, y1))
+    d = ImageDraw.Draw(base_img)
+    d.rounded_rectangle((x1, y1, x2, y2), radius=18, outline=border_color, width=3)
 
 
 def _panel(draw: ImageDraw.ImageDraw, box, fill, outline, radius=28, width=3):
     draw.rounded_rectangle(box, radius=radius, fill=fill, outline=outline, width=width)
 
 
+def _vertical_gradient(size, top_rgb, bottom_rgb):
+    w, h = size
+    img = Image.new("RGBA", size)
+    d = ImageDraw.Draw(img)
+    for y in range(h):
+        t = y / max(h - 1, 1)
+        r = int(top_rgb[0] * (1 - t) + bottom_rgb[0] * t)
+        g = int(top_rgb[1] * (1 - t) + bottom_rgb[1] * t)
+        b = int(top_rgb[2] * (1 - t) + bottom_rgb[2] * t)
+        d.line((0, y, w, y), fill=(r, g, b, 255))
+    return img
+
+
 def build_match_card(row, tz: ZoneInfo) -> str:
-    width, height = 1600, 900
-    img = Image.new("RGBA", (width, height), (10, 18, 34, 255))
+    width, height = 1120, 1400
+    img = _vertical_gradient((width, height), (7, 18, 40), (3, 9, 24))
     draw = ImageDraw.Draw(img)
 
-    for y in range(height):
-        ratio = y / max(height - 1, 1)
-        r = int(8 + 22 * ratio)
-        g = int(16 + 28 * ratio)
-        b = int(34 + 52 * ratio)
-        draw.line((0, y, width, y), fill=(r, g, b, 255))
+    # Background glows
+    glow = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    gd = ImageDraw.Draw(glow)
+    gd.ellipse((-120, 240, 320, 760), fill=(0, 80, 180, 70))
+    gd.ellipse((width - 320, 240, width + 120, 760), fill=(180, 0, 30, 70))
+    gd.ellipse((380, 360, 740, 860), fill=(245, 185, 40, 35))
+    glow = glow.filter(ImageFilter.GaussianBlur(70))
+    img.alpha_composite(glow)
 
-    _panel(draw, (55, 55, width - 55, height - 55), (20, 36, 60, 120), (247, 247, 245, 255), radius=42, width=3)
+    gold = (230, 182, 72, 255)
+    blue_line = (70, 120, 220, 255)
+    red_line = (210, 80, 90, 255)
+    white = (242, 245, 250, 255)
+    muted = (190, 205, 230, 255)
 
-    title_font = _font(FONT_BOLD, 38)
-    info_font = _font(FONT_REGULAR, 30)
-    stage_font = _font(FONT_BOLD, 28)
-    vs_font = _font(FONT_BOLD, 52)
-    venue_font = _font(FONT_REGULAR, 30)
-
-    kickoff = row["kickoff_utc"].astimezone(tz)
-    stage = _safe_group_label(row.get("group_name") or row.get("round_name"))
-
-    _panel(draw, (95, 95, 1505, 185), (8, 22, 42, 210), (96, 130, 180, 255), radius=24, width=2)
-    draw.text((125, 112), "WORLD CUP 2026", font=title_font, fill=(235, 240, 248, 255))
-    draw.text((125, 148), kickoff.strftime("%d.%m.%Y   %H:%M"), font=info_font, fill=(195, 208, 228, 255))
-
-    stage_w = draw.textlength(stage, font=stage_font)
-    badge_w = int(stage_w + 56)
-    _panel(draw, (1505 - badge_w - 24, 112, 1505 - 24, 166), (33, 54, 84, 255), (120, 155, 210, 255), radius=18, width=2)
-    draw.text((1505 - badge_w - 24 + 28, 126), stage, font=stage_font, fill=(232, 240, 250, 255))
-
-    _panel(draw, (110, 215, 1490, 785), (15, 33, 56, 120), (86, 120, 170, 255), radius=30, width=2)
-    draw.line((800, 255, 800, 745), fill=(62, 90, 128, 255), width=3)
-    draw.ellipse((710, 420, 890, 600), outline=(62, 90, 128, 255), width=3)
-
-    left_box = (140, 265, 690, 675)
-    right_box = (910, 265, 1460, 675)
-    _panel(draw, left_box, (27, 52, 103, 255), (120, 160, 225, 255), radius=28, width=3)
-    _panel(draw, right_box, (114, 37, 37, 255), (230, 130, 130, 255), radius=28, width=3)
-
-    _draw_flag_image(img, str(row["home_team"]), (205, 315, 625, 505))
-    _draw_flag_image(img, str(row["away_team"]), (975, 315, 1395, 505))
-
-    left_name = _short(str(row["home_team"]))
-    right_name = _short(str(row["away_team"]))
-    team_font_left = _fit_text(draw, left_name, 470, 68)
-    team_font_right = _fit_text(draw, right_name, 470, 68)
-    left_w = draw.textlength(left_name, font=team_font_left)
-    right_w = draw.textlength(right_name, font=team_font_right)
-    draw.text((415 - left_w / 2, 560), left_name, font=team_font_left, fill=(255, 255, 255, 255))
-    draw.text((1185 - right_w / 2, 560), right_name, font=team_font_right, fill=(255, 255, 255, 255))
-
-    _panel(draw, (720, 450, 880, 560), (244, 191, 78, 255), (255, 224, 140, 255), radius=28, width=2)
-    vs_w = draw.textlength("VS", font=vs_font)
-    draw.text((800 - vs_w / 2, 479), "VS", font=vs_font, fill=(25, 25, 25, 255))
-
-    venue = str(row.get("venue") or "Venue TBA")
-    venue_text = f"STADIUM  •  {venue}"
-    _panel(draw, (350, 805, 1250, 855), (8, 22, 42, 220), (96, 130, 180, 255), radius=22, width=2)
-    venue_w = draw.textlength(venue_text, font=venue_font)
-    draw.text((800 - venue_w / 2, 818), venue_text, font=venue_font, fill=(220, 232, 245, 255))
-
-    temp = Path(tempfile.gettempdir()) / f"match_card_{row['fixture_id']}.png"
-    img.convert("RGB").save(temp, format="PNG")
-    return str(temp)
-
-
-
-def _wrap_text(draw: ImageDraw.ImageDraw, text: str, font, max_width: int) -> list[str]:
-    if not text:
-        return []
-
-    lines: list[str] = []
-    for paragraph in str(text).splitlines():
-        words = paragraph.split(" ")
-        if not words:
-            lines.append("")
-            continue
-
-        current = ""
-        for word in words:
-            candidate = word if not current else current + " " + word
-            if draw.textlength(candidate, font=font) <= max_width:
-                current = candidate
-            else:
-                if current:
-                    lines.append(current)
-                current = word
-
-        if current:
-            lines.append(current)
-
-    return lines
-
-
-def _draw_wrapped_text(
-    draw: ImageDraw.ImageDraw,
-    xy: tuple[int, int],
-    text: str,
-    font,
-    fill,
-    max_width: int,
-    line_gap: int = 8,
-    max_lines: int | None = None,
-) -> int:
-    x, y = xy
-    lines = _wrap_text(draw, text, font, max_width)
-
-    if max_lines is not None and len(lines) > max_lines:
-        lines = lines[:max_lines]
-        if lines:
-            lines[-1] = lines[-1].rstrip() + "…"
-
-    line_h = font.size + line_gap
-    for line in lines:
-        draw.text((x, y), line, font=font, fill=fill)
-        y += line_h
-
-    return y
-
-
-def build_personal_match_card(row, user_data, tz: ZoneInfo) -> str:
-    width, height = 1600, 2200
-    img = Image.new("RGBA", (width, height), (10, 18, 34, 255))
-    draw = ImageDraw.Draw(img)
-
-    for y in range(height):
-        ratio = y / max(height - 1, 1)
-        r = int(8 + 22 * ratio)
-        g = int(16 + 28 * ratio)
-        b = int(34 + 52 * ratio)
-        draw.line((0, y, width, y), fill=(r, g, b, 255))
-
-    title_font = _font(FONT_BOLD, 44)
-    info_font = _font(FONT_REGULAR, 34)
-    stage_font = _font(FONT_BOLD, 30)
-    vs_font = _font(FONT_BOLD, 52)
-    team_font_big = _font(FONT_BOLD, 62)
-    section_font = _font(FONT_BOLD, 38)
-    body_font = _font(FONT_REGULAR, 34)
-    small_font = _font(FONT_REGULAR, 28)
-
-    kickoff = row["kickoff_utc"].astimezone(tz)
-    stage = _safe_group_label(row.get("group_name") or row.get("round_name"))
-
-    _panel(draw, (55, 55, width - 55, height - 55), (20, 36, 60, 120), (247, 247, 245, 255), radius=42, width=3)
+    # Outer frame
+    _panel(draw, (18, 18, width - 18, height - 18), (4, 11, 26, 55), gold, radius=38, width=2)
+    _panel(draw, (32, 32, width - 32, height - 32), (8, 18, 36, 90), (90, 120, 180, 130), radius=32, width=1)
 
     # Header
-    _panel(draw, (95, 95, 1505, 205), (8, 22, 42, 210), (96, 130, 180, 255), radius=24, width=2)
-    draw.text((125, 115), "WORLD CUP 2026", font=title_font, fill=(235, 240, 248, 255))
-    draw.text((125, 165), kickoff.strftime("%d.%m.%Y   %H:%M"), font=info_font, fill=(195, 208, 228, 255))
+    _panel(draw, (40, 42, width - 40, 240), (5, 15, 32, 220), (85, 118, 175, 255), radius=28, width=2)
+    title_font = _font(FONT_BOLD, 66)
+    info_font = _font(FONT_REGULAR, 30)
+    group_font = _font(FONT_BOLD, 28)
+    draw.text((170, 78), "WORLD CUP 2026", font=title_font, fill=white)
 
-    stage_w = draw.textlength(stage, font=stage_font)
-    badge_w = int(stage_w + 56)
-    _panel(draw, (1505 - badge_w - 24, 125, 1505 - 24, 180), (33, 54, 84, 255), (120, 155, 210, 255), radius=18, width=2)
-    draw.text((1505 - badge_w - 24 + 28, 139), stage, font=stage_font, fill=(232, 240, 250, 255))
+    # Simple gold trophy marker without emoji
+    _panel(draw, (70, 72, 130, 184), (55, 40, 0, 180), gold, radius=20, width=2)
+    cup_font = _font(FONT_BOLD, 26)
+    draw.text((82, 112), "WC", font=cup_font, fill=(30, 20, 0, 255))
 
-    # Pitch / teams
-    _panel(draw, (110, 245, 1490, 860), (15, 33, 56, 120), (86, 120, 170, 255), radius=30, width=2)
-    draw.line((800, 300, 800, 810), fill=(62, 90, 128, 255), width=3)
-    draw.ellipse((710, 475, 890, 655), outline=(62, 90, 128, 255), width=3)
+    kickoff = row['kickoff_utc'].astimezone(tz)
+    date_box = (175, 158, 410, 208)
+    time_box = (435, 158, 620, 208)
+    _panel(draw, date_box, (8, 25, 54, 255), (52, 158, 255, 255), radius=16, width=2)
+    _panel(draw, time_box, (8, 25, 54, 255), (52, 158, 255, 255), radius=16, width=2)
+    draw.text((195, 171), kickoff.strftime('%d.%m.%Y'), font=info_font, fill=white)
+    draw.text((470, 171), kickoff.strftime('%H:%M'), font=info_font, fill=white)
 
-    left_box = (140, 305, 690, 745)
-    right_box = (910, 305, 1460, 745)
-    _panel(draw, left_box, (27, 52, 103, 255), (120, 160, 225, 255), radius=28, width=3)
-    _panel(draw, right_box, (114, 37, 37, 255), (230, 130, 130, 255), radius=28, width=3)
+    stage = _safe_group_label(row.get('group_name') or row.get('round_name'))
+    stage_w = draw.textlength(stage, font=group_font)
+    stage_box = (width - 40 - int(stage_w) - 70, 96, width - 72, 168)
+    _panel(draw, stage_box, (16, 22, 40, 255), gold, radius=18, width=2)
+    draw.text((stage_box[0] + 28, stage_box[1] + 20), stage, font=group_font, fill=gold)
 
-    _draw_flag_image(img, str(row["home_team"]), (205, 360, 625, 550))
-    _draw_flag_image(img, str(row["away_team"]), (975, 360, 1395, 550))
+    draw.line((42, 242, width - 42, 242), fill=gold, width=2)
+    draw.line((42, 244, width - 42, 244), fill=(255, 220, 120, 80), width=1)
 
-    left_name = _short(str(row["home_team"]))
-    right_name = _short(str(row["away_team"]))
-    left_font = _fit_text(draw, left_name, 470, 62)
-    right_font = _fit_text(draw, right_name, 470, 62)
-    left_w = draw.textlength(left_name, font=left_font)
-    right_w = draw.textlength(right_name, font=right_font)
-    draw.text((415 - left_w / 2, 615), left_name, font=left_font, fill=(255, 255, 255, 255))
-    draw.text((1185 - right_w / 2, 615), right_name, font=right_font, fill=(255, 255, 255, 255))
+    # Main field area
+    _panel(draw, (40, 255, width - 40, 1160), (5, 14, 28, 110), (76, 116, 180, 255), radius=32, width=2)
+    # pitch hints
+    draw.line((width // 2, 255, width // 2, 1160), fill=(50, 82, 130, 140), width=3)
+    draw.ellipse((width//2 - 110, 610 - 110, width//2 + 110, 610 + 110), outline=(50,82,130,140), width=3)
+    draw.ellipse((width//2 - 10, 610 - 10, width//2 + 10, 610 + 10), fill=gold)
 
-    _panel(draw, (720, 510, 880, 620), (244, 191, 78, 255), (255, 224, 140, 255), radius=28, width=2)
-    vs_w = draw.textlength("VS", font=vs_font)
-    draw.text((800 - vs_w / 2, 539), "VS", font=vs_font, fill=(25, 25, 25, 255))
+    # Light beams
+    for offset in [0, 22, 44, 66]:
+        draw.arc((-120-offset, 320-offset, 500, 920), 292, 350, fill=(80,130,230,100), width=2)
+        draw.arc((width-500, 320-offset, width+120+offset, 920), 190, 248, fill=(180,70,80,100), width=2)
 
-    venue = str(row.get("venue") or "Venue TBA")
-    venue_text = f"STADIUM  •  {venue}"
-    _panel(draw, (350, 885, 1250, 940), (8, 22, 42, 220), (96, 130, 180, 255), radius=22, width=2)
-    venue_w = draw.textlength(venue_text, font=small_font)
-    draw.text((800 - venue_w / 2, 901), venue_text, font=small_font, fill=(220, 232, 245, 255))
+    left_panel = (70, 470, 440, 948)
+    right_panel = (680, 470, 1050, 948)
+    _panel(draw, left_panel, (8, 18, 38, 150), blue_line, radius=30, width=3)
+    _panel(draw, right_panel, (8, 18, 38, 150), red_line, radius=30, width=3)
 
-    prediction = user_data["prediction"] if user_data and user_data["prediction"] else "Пока не указан."
-    note = user_data["note"] if user_data and user_data["note"] else "Пока не добавлена."
+    # Rectangular flags
+    _draw_flag_image(img, str(row['home_team']), (88, 500, 422, 705), border_color=(150, 190, 250, 255))
+    _draw_flag_image(img, str(row['away_team']), (698, 500, 1032, 705), border_color=(250, 165, 170, 255))
 
-    # Prediction panel
-    _panel(draw, (95, 990, 1505, 1190), (10, 24, 45, 230), (96, 130, 180, 255), radius=26, width=2)
-    draw.text((135, 1025), "ПРОГНОЗ", font=section_font, fill=(235, 240, 248, 255))
-    _draw_wrapped_text(draw, (135, 1085), prediction, body_font, (220, 232, 245, 255), 1330, max_lines=2)
+    name_font_left = _fit_text(draw, _short(str(row['home_team'])), 320, 46)
+    name_font_right = _fit_text(draw, _short(str(row['away_team'])), 320, 46)
+    left_name = _short(str(row['home_team'])).upper()
+    right_name = _short(str(row['away_team'])).upper()
+    lw = draw.textlength(left_name, font=name_font_left)
+    rw = draw.textlength(right_name, font=name_font_right)
+    draw.text((255 - lw/2, 805), left_name, font=name_font_left, fill=white)
+    draw.text((865 - rw/2, 805), right_name, font=name_font_right, fill=white)
 
-    # Note panel
-    _panel(draw, (95, 1230, 1505, 2110), (10, 24, 45, 230), (96, 130, 180, 255), radius=26, width=2)
-    draw.text((135, 1265), "ЗАМЕТКА", font=section_font, fill=(235, 240, 248, 255))
-    _draw_wrapped_text(draw, (135, 1330), note, body_font, (220, 232, 245, 255), 1330, max_lines=22)
+    # VS medallion
+    medal = Image.new('RGBA', (170, 170), (0,0,0,0))
+    md = ImageDraw.Draw(medal)
+    md.ellipse((0,0,169,169), fill=(18, 26, 42, 255), outline=gold, width=5)
+    md.ellipse((14,14,155,155), outline=(255, 235, 170, 120), width=2)
+    vs_font = _font(FONT_BOLD, 62)
+    md.text((45, 51), 'VS', font=vs_font, fill=gold)
+    medal = medal.filter(ImageFilter.GaussianBlur(0.2))
+    img.alpha_composite(medal, (width//2 - 85, 610 - 85))
+    # glow dots
+    for dx, dy in [(0, -92), (0, 92), (-92, 0), (92, 0)]:
+        draw.ellipse((width//2+dx-5, 610+dy-5, width//2+dx+5, 610+dy+5), fill=(255,210,120,255))
 
-    temp = Path(tempfile.gettempdir()) / f"match_personal_card_{row['fixture_id']}.png"
-    img.convert("RGB").save(temp, format="PNG")
+    # Stadium bar
+    venue = str(row.get('venue') or 'Venue TBA')
+    _panel(draw, (70, 1015, 1050, 1095), (7, 18, 38, 230), (76, 116, 180, 255), radius=22, width=2)
+    vfont = _font(FONT_REGULAR, 26)
+    vfont_bold = _font(FONT_BOLD, 26)
+    draw.line((115, 1055, 245, 1055), fill=gold, width=2)
+    draw.line((875, 1055, 1005, 1055), fill=gold, width=2)
+    label = 'STADIUM'
+    venue_w = draw.textlength(venue, font=vfont)
+    label_w = draw.textlength(label, font=vfont_bold)
+    total_w = label_w + 18 + venue_w
+    start_x = width/2 - total_w/2
+    draw.text((start_x, 1036), label, font=vfont_bold, fill=white)
+    draw.text((start_x + label_w + 18, 1036), venue, font=vfont, fill=white)
+
+    # Bottom accent
+    draw.line((80, 1340, 460, 1340), fill=gold, width=2)
+    draw.line((660, 1340, 1040, 1340), fill=gold, width=2)
+    draw.ellipse((523, 1312, 597, 1386), fill=(18,26,42,255), outline=gold, width=3)
+    ball_font = _font(FONT_BOLD, 28)
+    draw.text((546, 1333), 'FC', font=ball_font, fill=gold)
+
+    temp = Path(tempfile.gettempdir()) / f"match_card_{row['fixture_id']}.png"
+    img.convert('RGB').save(temp, format='PNG')
     return str(temp)

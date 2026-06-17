@@ -1,20 +1,18 @@
-# Patch: card with prediction and note
 
-Заменить только эти файлы:
+Patch with updated clean card.
 
-- `db.py`
-- `formatting.py`
-- `keyboards.py`
-- `main.py`
-- `match_card.py`
+Replace these files:
+- db.py
+- formatting.py
+- keyboards.py
+- main.py
+- match_card.py
 
-Что изменено:
-
-- `/next` снова присылает карточку-картинку
-- прогноз и заметка рисуются прямо внутри карточки
-- после сохранения прогноза или заметки бот редактирует исходную карточку
-- лимит заметки уменьшен до 1500 символов
-
-Важно:
-
-Telegram не позволяет сделать подпись к фото на 1500 символов, поэтому прогноз и заметка теперь вшиваются прямо в PNG-карточку.
+What changed:
+- the match card is redesigned in a cleaner premium style
+- flags are rectangular
+- the card contains only teams, flags, date, time, group and stadium
+- prediction and note stay in a separate text post
+- note limit is 1500 characters
+- unsupported emoji inside the image were removed
+- after you save a prediction or note, the separate text post updates in place

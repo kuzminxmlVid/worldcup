@@ -1,3 +1,4 @@
+
 from aiogram.types import KeyboardButton, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
 
 
@@ -30,9 +31,7 @@ def nav_inline_keyboard(reminders_enabled: bool | None = None) -> InlineKeyboard
                 InlineKeyboardButton(text=alerts_label, callback_data="nav:alerts_toggle"),
                 InlineKeyboardButton(text="Обновить", callback_data="nav:sync"),
             ],
-            [
-                InlineKeyboardButton(text="Меню", callback_data="nav:menu"),
-            ],
+            [InlineKeyboardButton(text="Меню", callback_data="nav:menu")],
         ]
     )
 
@@ -54,7 +53,7 @@ def match_inline_keyboard(
                 InlineKeyboardButton(text=note_label, callback_data=f"match:note:{fixture_id}"),
             ],
             [
-                InlineKeyboardButton(text="Обновить карточку", callback_data=f"match:show:{fixture_id}"),
+                InlineKeyboardButton(text="Показать мои данные", callback_data=f"match:show:{fixture_id}"),
                 InlineKeyboardButton(text="Очистить", callback_data=f"match:clear:{fixture_id}"),
             ],
             [

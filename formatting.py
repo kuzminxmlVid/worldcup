@@ -2,7 +2,6 @@ from collections import OrderedDict
 from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-
 TEAM_FLAGS = {
     "Algeria": "🇩🇿",
     "Argentina": "🇦🇷",
@@ -55,19 +54,22 @@ TEAM_FLAGS = {
 }
 
 GROUP_ICONS = {
-    "Группа A": "🅰️",
-    "Группа B": "🅱️",
-    "Группа C": "🇨",
-    "Группа D": "🇩",
-    "Группа E": "🇪",
-    "Группа F": "🇫",
-    "Группа G": "🇬",
-    "Группа H": "🇭",
-    "Группа I": "🇮",
-    "Группа J": "🇯",
-    "Группа K": "🇰",
-    "Группа L": "🇱",
+    "Группа A": "A",
+    "Группа B": "B",
+    "Группа C": "C",
+    "Группа D": "D",
+    "Группа E": "E",
+    "Группа F": "F",
+    "Группа G": "G",
+    "Группа H": "H",
+    "Группа I": "I",
+    "Группа J": "J",
+    "Группа K": "K",
+    "Группа L": "L",
 }
+
+NOTE_MAX_LEN = 1500
+PREDICTION_MAX_LEN = 200
 
 
 def day_bounds_utc(day, tz: ZoneInfo):
@@ -82,8 +84,11 @@ def team_with_flag(name: str) -> str:
 
 def stage_with_icon(group_or_round: str) -> str:
     if not group_or_round:
-        return "🏷️ Стадия не указана"
-    return f"{GROUP_ICONS.get(group_or_round, '🏷️')} {group_or_round}"
+        return "Стадия не указана"
+    letter = GROUP_ICONS.get(group_or_round)
+    if letter:
+        return f"Группа {letter}"
+    return str(group_or_round)
 
 
 def match_line(row, tz: ZoneInfo) -> str:
@@ -95,34 +100,58 @@ def match_line(row, tz: ZoneInfo) -> str:
         score = f"  •  {row['home_goals']}:{row['away_goals']}"
 
     lines = [
-        f"🕒 {kickoff.strftime('%H:%M')}",
+        f"Время {kickoff.strftime('%H:%M')}",
         f"{team_with_flag(row['home_team'])} — {team_with_flag(row['away_team'])}{score}",
         stage_with_icon(group_or_round),
     ]
 
     if row["venue"]:
-        lines.append(f"🏟️ {row['venue']}")
+        lines.append(f"Стадион {row['venue']}")
 
     return "\n".join(lines)
 
 
-def format_single_match(row, tz: ZoneInfo, title: str = "⏭️ Следующий матч ЧМ") -> str:
+def format_single_match(row, tz: ZoneInfo, title: str = "Следующий матч ЧМ") -> str:
     kickoff = row["kickoff_utc"].astimezone(tz)
     group_or_round = row["group_name"] or row["round_name"] or "Стадия не указана"
 
     lines = [
         title,
         "",
-        f"📅 {kickoff.strftime('%d.%m.%Y')}",
-        f"🕒 {kickoff.strftime('%H:%M')}",
+        f"Дата {kickoff.strftime('%d.%m.%Y')}",
+        f"Время {kickoff.strftime('%H:%M')}",
         "",
         f"{team_with_flag(row['home_team'])} — {team_with_flag(row['away_team'])}",
         stage_with_icon(group_or_round),
     ]
 
     if row["venue"]:
-        lines.append(f"🏟️ {row['venue']}")
+        lines.append(f"Стадион {row['venue']}")
 
+    return "\n".join(lines)
+
+
+def format_user_match_data(row, user_data, tz: ZoneInfo) -> str:
+    kickoff = row["kickoff_utc"].astimezone(tz)
+    prediction = None
+    note = None
+    if user_data:
+        prediction = user_data["prediction"]
+        note = user_data["note"]
+
+    lines = [
+        "Мои данные по матчу",
+        "",
+        f"Дата {kickoff.strftime('%d.%m.%Y')}",
+        f"Время {kickoff.strftime('%H:%M')}",
+        f"{team_with_flag(row['home_team'])} — {team_with_flag(row['away_team'])}",
+        "",
+        "Прогноз:",
+        prediction if prediction else "Пока не указан.",
+        "",
+        "Заметка:",
+        note if note else "Пока не добавлена.",
+    ]
     return "\n".join(lines)
 
 
@@ -137,7 +166,7 @@ def format_matches(title: str, rows, tz: ZoneInfo) -> str:
 
     parts = [title]
     for day, day_rows in grouped.items():
-        parts.append(f"📅 {day.strftime('%d.%m.%Y')}")
+        parts.append(f"Дата {day.strftime('%d.%m.%Y')}")
         for row in day_rows:
             parts.append(match_line(row, tz))
     return "\n\n".join(parts)
@@ -148,18 +177,18 @@ def format_reminder(row, tz: ZoneInfo) -> str:
     group_or_round = row["group_name"] or row["round_name"] or "Стадия не указана"
 
     lines = [
-        "🔔 Через час матч ЧМ",
-        f"🕒 {kickoff.strftime('%d.%m, %H:%M')}",
+        "Через час матч ЧМ",
+        f"Время {kickoff.strftime('%d.%m, %H:%M')}",
         f"{team_with_flag(row['home_team'])} — {team_with_flag(row['away_team'])}",
         stage_with_icon(group_or_round),
     ]
     if row["venue"]:
-        lines.append(f"🏟️ {row['venue']}")
+        lines.append(f"Стадион {row['venue']}")
     return "\n".join(lines)
 
 
 def format_debug(count, first_row, last_row, next_rows, tz: ZoneInfo) -> str:
-    lines = ["🧪 Debug", f"Матчей в базе: {count}"]
+    lines = ["Debug", f"Матчей в базе: {count}"]
 
     if first_row:
         lines.append(f"Первый матч: {first_row['kickoff_utc'].astimezone(tz).strftime('%d.%m.%Y %H:%M')}")
@@ -180,75 +209,8 @@ def format_debug(count, first_row, last_row, next_rows, tz: ZoneInfo) -> str:
 
 def format_alerts_status(enabled: bool) -> str:
     if enabled:
-        return "🔔 Автопост за час до матча включён. Я буду присылать карточку ближайшего матча автоматически."
-    return "🔕 Автопост за час до матча выключен. Автоматические карточки приходить не будут."
-
-
-def help_text(reminders_enabled: bool | None = True) -> str:
-    status = "включён" if reminders_enabled else "выключен"
-    return (
-        "Что умею:\n"
-        "• Сегодня\n"
-        "• Завтра\n"
-        "• Следующий матч с PNG-карточкой и флагами\n"
-        "• Расписание на 7 дней\n"
-        "• Автопост за час до матча\n\n"
-        f"Сейчас автопост: {status}.\n"
-        "Можно пользоваться кнопками снизу или командами /today /tomorrow /next /week /sync /alerts"
-    )
-
-
-def split_telegram_text(text: str, limit: int = 3900) -> list[str]:
-    if len(text) <= limit:
-        return [text]
-
-    parts = []
-    current = ""
-
-    for block in text.split("\n\n"):
-        piece = block if not current else "\n\n" + block
-        if len(current) + len(piece) > limit:
-            if current:
-                parts.append(current)
-            current = block
-        else:
-            current += piece
-
-    if current:
-        parts.append(current)
-
-    return parts
-
-
-
-NOTE_MAX_LEN = 1500
-PREDICTION_MAX_LEN = 200
-
-
-def format_user_match_data(row, user_data, tz: ZoneInfo) -> str:
-    kickoff = row["kickoff_utc"].astimezone(tz)
-    prediction = None
-    note = None
-
-    if user_data:
-        prediction = user_data["prediction"]
-        note = user_data["note"]
-
-    lines = [
-        "🧾 Мои данные по матчу",
-        "",
-        f"📅 {kickoff.strftime('%d.%m.%Y')}",
-        f"🕒 {kickoff.strftime('%H:%M')}",
-        f"{team_with_flag(row['home_team'])} — {team_with_flag(row['away_team'])}",
-        "",
-        "🔮 Прогноз:",
-        prediction if prediction else "Пока не указан.",
-        "",
-        "📝 Заметка:",
-        note if note else "Пока не добавлена.",
-    ]
-
-    return "\n".join(lines)
+        return "Автопост за час до матча включён. Я буду присылать карточку ближайшего матча автоматически."
+    return "Автопост за час до матча выключен. Автоматические карточки приходить не будут."
 
 
 def format_note_too_long(length: int) -> str:
@@ -265,3 +227,38 @@ def format_prediction_too_long(length: int) -> str:
         f"Максимум: {PREDICTION_MAX_LEN} символов.\n"
         "Пришли короткий прогноз, например: 2:1 или Portugal 2:1 DR Congo."
     )
+
+
+def help_text(reminders_enabled: bool | None = True) -> str:
+    status = "включён" if reminders_enabled else "выключен"
+    return (
+        "Что умею:\n"
+        "• Сегодня\n"
+        "• Завтра\n"
+        "• Следующий матч с карточкой\n"
+        "• Личный прогноз на матч\n"
+        "• Личная заметка по матчу до 1500 символов\n"
+        "• Расписание на 7 дней\n"
+        "• Автопост за час до матча\n\n"
+        f"Сейчас автопост: {status}.\n"
+        "Можно пользоваться кнопками снизу или командами /today /tomorrow /next /week /sync /alerts"
+    )
+
+
+def split_telegram_text(text: str, limit: int = 3900) -> list[str]:
+    if len(text) <= limit:
+        return [text]
+
+    parts = []
+    current = ""
+    for block in text.split("\n\n"):
+        piece = block if not current else "\n\n" + block
+        if len(current) + len(piece) > limit:
+            if current:
+                parts.append(current)
+            current = block
+        else:
+            current += piece
+    if current:
+        parts.append(current)
+    return parts
