@@ -106,6 +106,36 @@ def match_line(row, tz: ZoneInfo) -> str:
     return "\n".join(lines)
 
 
+def format_single_match(row, tz: ZoneInfo, title: str = "⏭️ Следующий матч ЧМ") -> str:
+    kickoff = row["kickoff_utc"].astimezone(tz)
+    group_or_round = row["group_name"] or row["round_name"] or "Стадия не указана"
+
+    score = ""
+    if row["home_goals"] is not None and row["away_goals"] is not None:
+        score = f"\nСчёт: {row['home_goals']}:{row['away_goals']}"
+
+    lines = [
+        title,
+        "",
+        f"📅 {kickoff.strftime('%d.%m.%Y')}",
+        f"🕒 {kickoff.strftime('%H:%M')}",
+        "",
+        f"{team_with_flag(row['home_team'])}",
+        "—",
+        f"{team_with_flag(row['away_team'])}",
+        "",
+        stage_with_icon(group_or_round),
+    ]
+
+    if row["venue"]:
+        lines.append(f"🏟️ {row['venue']}")
+
+    if score:
+        lines.append(score)
+
+    return "\n".join(lines)
+
+
 def format_matches(title: str, rows, tz: ZoneInfo) -> str:
     if not rows:
         return f"{title}\n\nМатчей нет."

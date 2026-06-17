@@ -8,13 +8,13 @@ from aiogram.types import Message
 
 import db
 from config import load_config
-from formatting import day_bounds_utc, format_matches, format_debug, split_telegram_text
+from formatting import day_bounds_utc, format_matches, format_debug, format_single_match, split_telegram_text
 from keyboards import main_keyboard
 from local_schedule import load_matches, SCHEDULE_PATH
 from scheduler import setup_scheduler, sync_fixtures
 
 
-VERSION = "local-schedule-2026-06-17-v2-pretty"
+VERSION = "local-schedule-2026-06-17-v3-next-match"
 
 logging.basicConfig(level=logging.INFO)
 
@@ -27,7 +27,7 @@ pool = None
 
 async def send_text(message: Message, text: str):
     for part in split_telegram_text(text):
-        await message.answer(part)
+        await message.answer(part, reply_markup=main_keyboard())
 
 
 async def send_today_text(message: Message):
@@ -52,6 +52,16 @@ async def send_week_text(message: Message):
     await send_text(message, format_matches("🏆 Матчи ЧМ на 7 дней", rows, config.app_tz))
 
 
+async def send_next_match_text(message: Message):
+    row = await db.get_next_match(pool)
+
+    if not row:
+        await message.answer("Ближайших матчей после текущего времени нет.", reply_markup=main_keyboard())
+        return
+
+    await message.answer(format_single_match(row, config.app_tz), reply_markup=main_keyboard())
+
+
 @dp.message(Command("start"))
 async def start(message: Message):
     await db.add_chat(pool, message.chat.id)
@@ -62,6 +72,7 @@ async def start(message: Message):
         "/today — матчи сегодня\n"
         "/tomorrow — матчи завтра\n"
         "/week — матчи на 7 дней\n"
+        "/next — следующий матч отдельным сообщением\n"
         "/sync — обновить расписание из локального schedule.json\n"
         "/debug — проверить базу\n"
         "/source — проверить локальный файл\n"
@@ -102,6 +113,11 @@ async def week(message: Message):
     await send_week_text(message)
 
 
+@dp.message(Command("next"))
+async def next_match(message: Message):
+    await send_next_match_text(message)
+
+
 @dp.message(Command("debug"))
 async def debug(message: Message):
     count, first_row, last_row, next_rows = await db.get_debug_stats(pool)
@@ -131,6 +147,11 @@ async def button_today(message: Message):
 @dp.message(F.text == "Завтра")
 async def button_tomorrow(message: Message):
     await send_tomorrow_text(message)
+
+
+@dp.message(F.text == "Следующий матч")
+async def button_next_match(message: Message):
+    await send_next_match_text(message)
 
 
 @dp.message(F.text == "7 дней")

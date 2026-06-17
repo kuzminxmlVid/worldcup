@@ -190,3 +190,17 @@ async def get_debug_stats(pool: asyncpg.Pool):
             """
         )
     return count, first_row, last_row, next_rows
+
+
+
+async def get_next_match(pool: asyncpg.Pool):
+    async with pool.acquire() as conn:
+        return await conn.fetchrow(
+            """
+            SELECT *
+            FROM matches
+            WHERE kickoff_utc >= NOW()
+            ORDER BY kickoff_utc ASC
+            LIMIT 1
+            """
+        )
