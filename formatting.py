@@ -1,5 +1,6 @@
 from collections import OrderedDict
 from datetime import datetime, time, timedelta, timezone
+from html import escape
 from zoneinfo import ZoneInfo
 
 TEAM_FLAGS = {
@@ -68,7 +69,9 @@ GROUP_ICONS = {
     "Группа L": "L",
 }
 
-NOTE_MAX_LEN = 1500
+EXPECTATION_MAX_LEN = 1500
+NOTE_MAX_LEN = EXPECTATION_MAX_LEN  # legacy import name
+POST_THOUGHTS_MAX_LEN = 1500
 PREDICTION_MAX_LEN = 200
 
 
@@ -82,6 +85,10 @@ def team_with_flag(name: str) -> str:
     return f"{TEAM_FLAGS.get(name, '🏳️')} {name}"
 
 
+def team_with_flag_html(name: str) -> str:
+    return f"{TEAM_FLAGS.get(name, '🏳️')} {escape(str(name))}"
+
+
 def stage_with_icon(group_or_round: str) -> str:
     if not group_or_round:
         return "Стадия не указана"
@@ -91,17 +98,26 @@ def stage_with_icon(group_or_round: str) -> str:
     return str(group_or_round)
 
 
+def _score_spoiler(row) -> str | None:
+    home_goals = row["home_goals"]
+    away_goals = row["away_goals"]
+    if home_goals is None or away_goals is None:
+        return None
+
+    home = escape(str(row["home_team"]))
+    away = escape(str(row["away_team"]))
+    status = row["status_long"] or row["status_short"] or ""
+    status_part = f" · {escape(str(status))}" if status else ""
+    return f'<tg-spoiler>{home} {home_goals}:{away_goals} {away}{status_part}</tg-spoiler>'
+
+
 def match_line(row, tz: ZoneInfo) -> str:
     kickoff = row["kickoff_utc"].astimezone(tz)
     group_or_round = row["group_name"] or row["round_name"] or "Стадия не указана"
 
-    score = ""
-    if row["home_goals"] is not None and row["away_goals"] is not None:
-        score = f"  •  {row['home_goals']}:{row['away_goals']}"
-
     lines = [
         f"Время {kickoff.strftime('%H:%M')}",
-        f"{team_with_flag(row['home_team'])} — {team_with_flag(row['away_team'])}{score}",
+        f"{team_with_flag(row['home_team'])} — {team_with_flag(row['away_team'])}",
         stage_with_icon(group_or_round),
     ]
 
@@ -133,25 +149,43 @@ def format_single_match(row, tz: ZoneInfo, title: str = "Следующий ма
 
 def format_user_match_data(row, user_data, tz: ZoneInfo) -> str:
     kickoff = row["kickoff_utc"].astimezone(tz)
+
     prediction = None
-    note = None
+    expectations = None
+    post_thoughts = None
+
     if user_data:
         prediction = user_data["prediction"]
-        note = user_data["note"]
+        expectations = user_data["note"]
+        try:
+            post_thoughts = user_data["post_match_thoughts"]
+        except Exception:
+            post_thoughts = None
 
     lines = [
         "Мои данные по матчу",
         "",
         f"Дата {kickoff.strftime('%d.%m.%Y')}",
         f"Время {kickoff.strftime('%H:%M')}",
-        f"{team_with_flag(row['home_team'])} — {team_with_flag(row['away_team'])}",
+        f"{team_with_flag_html(row['home_team'])} — {team_with_flag_html(row['away_team'])}",
+    ]
+
+    hidden_score = _score_spoiler(row)
+    if hidden_score:
+        lines.extend(["", "Счёт:", hidden_score])
+
+    lines.extend([
         "",
         "Прогноз:",
-        prediction if prediction else "Пока не указан.",
+        escape(str(prediction)) if prediction else "Пока не указан.",
         "",
-        "Заметка:",
-        note if note else "Пока не добавлена.",
-    ]
+        "Ожидания от матча:",
+        escape(str(expectations)) if expectations else "Пока не добавлены.",
+        "",
+        "Мысли после матча:",
+        escape(str(post_thoughts)) if post_thoughts else "Пока не добавлены.",
+    ])
+
     return "\n".join(lines)
 
 
@@ -213,10 +247,22 @@ def format_alerts_status(enabled: bool) -> str:
     return "Автопост за час до матча выключен. Автоматические карточки приходить не будут."
 
 
-def format_note_too_long(length: int) -> str:
+def format_expectation_too_long(length: int) -> str:
     return (
-        f"Заметка слишком длинная: {length} символов.\n\n"
-        f"Максимум: {NOTE_MAX_LEN} символов.\n"
+        f"Ожидания слишком длинные: {length} символов.\n\n"
+        f"Максимум: {EXPECTATION_MAX_LEN} символов.\n"
+        "Сократи текст и пришли ещё раз. Я пока ничего не сохранил."
+    )
+
+
+def format_note_too_long(length: int) -> str:
+    return format_expectation_too_long(length)
+
+
+def format_post_thoughts_too_long(length: int) -> str:
+    return (
+        f"Мысли после матча слишком длинные: {length} символов.\n\n"
+        f"Максимум: {POST_THOUGHTS_MAX_LEN} символов.\n"
         "Сократи текст и пришли ещё раз. Я пока ничего не сохранил."
     )
 
@@ -236,12 +282,15 @@ def help_text(reminders_enabled: bool | None = True) -> str:
         "• Сегодня\n"
         "• Завтра\n"
         "• Следующий матч с карточкой\n"
+        "• Поиск матчей по команде через /team или /search\n"
         "• Личный прогноз на матч\n"
-        "• Личная заметка по матчу до 1500 символов\n"
+        "• Ожидания от матча до 1500 символов\n"
+        "• Мысли после матча до 1500 символов\n"
         "• Расписание на 7 дней\n"
-        "• Автопост за час до матча\n\n"
+        "• Автопост за час до матча через /alerts\n"
+        "• Очистка данных последнего открытого матча через /clear\n\n"
         f"Сейчас автопост: {status}.\n"
-        "Можно пользоваться кнопками снизу или командами /today /tomorrow /next /week /team /sync /alerts"
+        "Команды: /today /tomorrow /next /week /team /search /alerts /clear /sync"
     )
 
 
@@ -251,6 +300,7 @@ def split_telegram_text(text: str, limit: int = 3900) -> list[str]:
 
     parts = []
     current = ""
+
     for block in text.split("\n\n"):
         piece = block if not current else "\n\n" + block
         if len(current) + len(piece) > limit:
@@ -259,6 +309,8 @@ def split_telegram_text(text: str, limit: int = 3900) -> list[str]:
             current = block
         else:
             current += piece
+
     if current:
         parts.append(current)
+
     return parts

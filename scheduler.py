@@ -6,6 +6,7 @@ from aiogram.types import FSInputFile
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 import db
+from api_football import ApiFootballError, fetch_score_for_match
 from formatting import day_bounds_utc, format_matches, format_reminder, split_telegram_text
 from keyboards import nav_inline_keyboard
 from local_schedule import load_matches
@@ -15,6 +16,59 @@ from match_card import build_match_card
 async def sync_fixtures(pool) -> int:
     matches = load_matches()
     return await db.replace_matches(pool, matches)
+
+
+async def sync_recent_scores(pool) -> None:
+    now = datetime.now(timezone.utc)
+
+    # Update matches that are likely live or recently finished.
+    # The score itself is shown only as Telegram spoiler text in the personal match post.
+    start_utc = now - timedelta(hours=4)
+    end_utc = now + timedelta(minutes=30)
+
+    rows = await db.get_matches_for_score_update(pool, start_utc, end_utc)
+
+    logging.info(
+        "Checking match scores: rows=%s start_utc=%s end_utc=%s",
+        len(rows),
+        start_utc,
+        end_utc,
+    )
+
+    for row in rows:
+        try:
+            score = await fetch_score_for_match(row)
+            await db.update_match_score(
+                pool,
+                fixture_id=row["fixture_id"],
+                api_fixture_id=score.get("api_fixture_id"),
+                status_short=score.get("status_short"),
+                status_long=score.get("status_long"),
+                home_goals=score.get("home_goals"),
+                away_goals=score.get("away_goals"),
+            )
+            logging.info(
+                "Score updated: fixture_id=%s %s %s:%s %s",
+                row["fixture_id"],
+                row["home_team"],
+                score.get("home_goals"),
+                score.get("away_goals"),
+                row["away_team"],
+            )
+        except ApiFootballError:
+            logging.exception(
+                "Score update skipped: fixture_id=%s %s - %s",
+                row["fixture_id"],
+                row["home_team"],
+                row["away_team"],
+            )
+        except Exception:
+            logging.exception(
+                "Unexpected score update error: fixture_id=%s %s - %s",
+                row["fixture_id"],
+                row["home_team"],
+                row["away_team"],
+            )
 
 
 async def send_daily_schedule(bot, pool, tz):
@@ -39,8 +93,6 @@ async def send_daily_schedule(bot, pool, tz):
 async def send_hour_reminders(bot, pool, tz):
     now = datetime.now(timezone.utc)
 
-    # Scheduler runs every 5 minutes. The wider window protects against deploy delays
-    # and short Railway sleeps/restarts, while sent_reminders prevents duplicates.
     start_utc = now + timedelta(minutes=50)
     end_utc = now + timedelta(minutes=70)
 
@@ -108,6 +160,16 @@ def setup_scheduler(bot, pool, config) -> AsyncIOScheduler:
         hours=12,
         args=[pool],
         id="sync_fixtures",
+        replace_existing=True,
+        max_instances=1,
+    )
+
+    scheduler.add_job(
+        sync_recent_scores,
+        "interval",
+        minutes=15,
+        args=[pool],
+        id="sync_recent_scores",
         replace_existing=True,
         max_instances=1,
     )

@@ -7,12 +7,13 @@ from datetime import datetime, timedelta
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
-from aiogram.types import Message, CallbackQuery, FSInputFile, ForceReply, InputMediaPhoto
+from aiogram.types import Message, CallbackQuery, FSInputFile, ForceReply
 
 import db
 from config import load_config
 from formatting import (
     NOTE_MAX_LEN,
+    POST_THOUGHTS_MAX_LEN,
     PREDICTION_MAX_LEN,
     day_bounds_utc,
     format_matches,
@@ -20,6 +21,7 @@ from formatting import (
     format_alerts_status,
     format_user_match_data,
     format_note_too_long,
+    format_post_thoughts_too_long,
     format_prediction_too_long,
     split_telegram_text,
     help_text,
@@ -27,10 +29,9 @@ from formatting import (
 from keyboards import main_keyboard, nav_inline_keyboard, match_inline_keyboard, match_list_keyboard
 from local_schedule import load_matches, SCHEDULE_PATH
 from match_card import build_match_card
-from api_football import ApiFootballError, fetch_score_for_match
 from scheduler import setup_scheduler, sync_fixtures
 
-VERSION = "local-schedule-2026-06-17-v18-score-api"
+VERSION = "local-schedule-2026-06-19-v20-buttons-hardfix"
 
 logging.basicConfig(level=logging.INFO)
 config = load_config()
@@ -38,7 +39,7 @@ bot = Bot(token=config.bot_token)
 dp = Dispatcher()
 pool = None
 
-REPLY_MARKER_RE = re.compile(r"Код:\s*(prediction|note|team_search):(\d+):(\d+)")
+REPLY_MARKER_RE = re.compile(r"Код:\s*(prediction|note|post_thoughts|team_search):(\d+):(\d+)")
 
 TEAM_ALIASES = {
     "алжир": "Algeria",
@@ -201,6 +202,7 @@ async def send_match_personal_post(
         reminders_enabled=enabled,
         has_prediction=bool(user_data and user_data["prediction"]),
         has_note=bool(user_data and user_data["note"]),
+        has_post_thoughts=bool(user_data and user_data["post_match_thoughts"]),
     )
 
     if source_message_id:
@@ -210,13 +212,13 @@ async def send_match_personal_post(
                 message_id=source_message_id,
                 text=text,
                 reply_markup=markup,
+                parse_mode="HTML",
             )
             return
         except Exception:
             logging.exception("Could not edit personal match post")
 
-    await message.answer(text, reply_markup=markup)
-
+    await message.answer(text, reply_markup=markup, parse_mode="HTML")
 
 async def send_match_by_id(message: Message, fixture_id: int, user_id: int | None = None):
     row = await db.get_match_by_id(pool, fixture_id)
@@ -276,77 +278,6 @@ async def toggle_alerts(message: Message):
     new_value = await db.toggle_reminders(pool, message.chat.id)
     await message.answer(format_alerts_status(new_value), reply_markup=nav_inline_keyboard(new_value))
 
-
-
-async def refresh_match_score(
-    message: Message,
-    fixture_id: int,
-    user_id: int,
-    source_message_id: int | None = None,
-):
-    row = await db.get_match_by_id(pool, fixture_id)
-    if not row:
-        await message.answer("Не нашёл этот матч в базе.")
-        return
-
-    await message.answer("Запрашиваю счёт...")
-
-    try:
-        score = await fetch_score_for_match(row)
-    except ApiFootballError as e:
-        await message.answer(f"Не получилось получить счёт: {e}")
-        return
-    except Exception as e:
-        logging.exception("Unexpected score refresh error")
-        await message.answer(f"Не получилось получить счёт: {e}")
-        return
-
-    await db.update_match_score(
-        pool,
-        fixture_id=fixture_id,
-        api_fixture_id=score.get("api_fixture_id"),
-        status_short=score.get("status_short"),
-        status_long=score.get("status_long"),
-        home_goals=score.get("home_goals"),
-        away_goals=score.get("away_goals"),
-    )
-
-    updated_row = await db.get_match_by_id(pool, fixture_id)
-    card_path = build_match_card(updated_row, config.app_tz)
-
-    try:
-        card_message_id = await db.get_match_card_message(
-            pool,
-            message.chat.id,
-            user_id,
-            fixture_id,
-        )
-
-        if card_message_id:
-            try:
-                await bot.edit_message_media(
-                    chat_id=message.chat.id,
-                    message_id=card_message_id,
-                    media=InputMediaPhoto(
-                        media=FSInputFile(card_path),
-                        caption="Карточка матча",
-                    ),
-                )
-            except Exception:
-                logging.exception("Could not edit score card, sending a new one")
-                sent_card = await message.answer_photo(FSInputFile(card_path), caption="Карточка матча")
-                await db.save_match_card_message(pool, message.chat.id, user_id, fixture_id, sent_card.message_id)
-        else:
-            sent_card = await message.answer_photo(FSInputFile(card_path), caption="Карточка матча")
-            await db.save_match_card_message(pool, message.chat.id, user_id, fixture_id, sent_card.message_id)
-
-    finally:
-        try:
-            Path(card_path).unlink(missing_ok=True)
-        except Exception:
-            pass
-
-    await send_match_personal_post(message, updated_row, source_message_id, user_id=user_id)
 
 
 async def prompt_team_search(message: Message, user_id: int):
@@ -441,13 +372,37 @@ async def prompt_note(message: Message, fixture_id: int, user_id: int, source_me
 
     marker = f"note:{fixture_id}:{source_message_id or 0}"
     await message.answer(
-        "Пришли заметку по матчу одним сообщением.\n\n"
+        "Пришли ожидания от матча одним сообщением.\n\n"
         f"Максимум: {NOTE_MAX_LEN} символов.\n"
         "Если текст будет длиннее, я не сохраню его и попрошу сократить.\n\n"
         f"Код: {marker}",
-        reply_markup=ForceReply(selective=True, input_field_placeholder="Напиши заметку"),
+        reply_markup=ForceReply(selective=True, input_field_placeholder="Ожидания от матча"),
     )
 
+
+async def prompt_post_thoughts(message: Message, fixture_id: int, user_id: int, source_message_id: int | None = None):
+    row = await db.get_match_by_id(pool, fixture_id)
+    if not row:
+        await message.answer("Не нашёл этот матч в базе.")
+        return
+
+    await db.set_pending_input(pool, message.chat.id, user_id, fixture_id, "post_thoughts", source_message_id)
+    logging.info(
+        "Pending input set: chat_id=%s user_id=%s fixture_id=%s action=post_thoughts source_message_id=%s",
+        message.chat.id,
+        user_id,
+        fixture_id,
+        source_message_id,
+    )
+
+    marker = f"post_thoughts:{fixture_id}:{source_message_id or 0}"
+    await message.answer(
+        "Пришли мысли после матча одним сообщением.\n\n"
+        f"Максимум: {POST_THOUGHTS_MAX_LEN} символов.\n"
+        "Если текст будет длиннее, я не сохраню его и попрошу сократить.\n\n"
+        f"Код: {marker}",
+        reply_markup=ForceReply(selective=True, input_field_placeholder="Мысли после матча"),
+    )
 
 async def handle_pending_text(message: Message) -> bool:
     if not message.text:
@@ -489,6 +444,11 @@ async def handle_pending_text(message: Message) -> bool:
 
     text = message.text.strip()
 
+    if action == "team_search":
+        await db.clear_pending_input(pool, message.chat.id, user_id)
+        await send_team_search_results(message, text)
+        return True
+
     if action == "prediction":
         if not text:
             await message.answer("Пустой прогноз не сохраняю. Пришли прогноз текстом.")
@@ -505,13 +465,27 @@ async def handle_pending_text(message: Message) -> bool:
 
     if action == "note":
         if not text:
-            await message.answer("Пустую заметку не сохраняю. Пришли заметку текстом.")
+            await message.answer("Пустые ожидания не сохраняю. Пришли текстом.")
             return True
         if len(text) > NOTE_MAX_LEN:
             await message.answer(format_note_too_long(len(text)))
             return True
 
         await db.save_note(pool, message.chat.id, user_id, fixture_id, text)
+        await db.clear_pending_input(pool, message.chat.id, user_id)
+        row = await db.get_match_by_id(pool, fixture_id)
+        await send_match_personal_post(message, row, source_message_id, user_id=user_id)
+        return True
+
+    if action == "post_thoughts":
+        if not text:
+            await message.answer("Пустые мысли после матча не сохраняю. Пришли текстом.")
+            return True
+        if len(text) > POST_THOUGHTS_MAX_LEN:
+            await message.answer(format_post_thoughts_too_long(len(text)))
+            return True
+
+        await db.save_post_match_thoughts(pool, message.chat.id, user_id, fixture_id, text)
         await db.clear_pending_input(pool, message.chat.id, user_id)
         row = await db.get_match_by_id(pool, fixture_id)
         await send_match_personal_post(message, row, source_message_id, user_id=user_id)
@@ -542,6 +516,21 @@ async def menu(message: Message):
 @dp.message(F.text == "Поиск команды")
 async def team_search(message: Message):
     await prompt_team_search(message, user_id_from_message(message))
+
+
+
+
+@dp.message(Command("clear"))
+async def clear_last_match_data(message: Message):
+    user_id = user_id_from_message(message)
+    row = await db.get_last_match_for_user(pool, message.chat.id, user_id)
+    if not row:
+        await message.answer("Не нашёл последний открытый матч. Открой матч и потом нажми /clear.")
+        return
+
+    await db.clear_user_match_data(pool, message.chat.id, user_id, row["fixture_id"])
+    await db.clear_pending_input(pool, message.chat.id, user_id)
+    await send_match_personal_post(message, row, user_id=user_id)
 
 
 @dp.message(Command("alerts"))
@@ -687,8 +676,10 @@ async def match_callback(callback: CallbackQuery):
         await prompt_prediction(callback.message, fixture_id, user_id, source_message_id)
     elif action == "note":
         await prompt_note(callback.message, fixture_id, user_id, source_message_id)
+    elif action == "post_thoughts":
+        await prompt_post_thoughts(callback.message, fixture_id, user_id, source_message_id)
     elif action == "score":
-        await refresh_match_score(callback.message, fixture_id, user_id, source_message_id)
+        await callback.message.answer("Счёт обновляется автоматически после матча и появится скрытым текстом в посте с твоими данными.")
     elif action == "show":
         row = await db.get_match_by_id(pool, fixture_id)
         if row:

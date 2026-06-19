@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS user_match_data (
     fixture_id BIGINT NOT NULL,
     prediction TEXT,
     note TEXT,
+    post_match_thoughts TEXT,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (chat_id, user_id, fixture_id)
 );
@@ -75,6 +76,7 @@ async def init_db(pool: asyncpg.Pool) -> None:
         await conn.execute("ALTER TABLE pending_inputs ADD COLUMN IF NOT EXISTS source_message_id BIGINT")
         await conn.execute("ALTER TABLE matches ADD COLUMN IF NOT EXISTS api_fixture_id BIGINT")
         await conn.execute("ALTER TABLE matches ADD COLUMN IF NOT EXISTS score_checked_at TIMESTAMPTZ")
+        await conn.execute("ALTER TABLE user_match_data ADD COLUMN IF NOT EXISTS post_match_thoughts TEXT")
 
 
 async def add_chat(pool: asyncpg.Pool, chat_id: int) -> None:
@@ -289,7 +291,7 @@ async def get_user_match_data(pool: asyncpg.Pool, chat_id: int, user_id: int, fi
     async with pool.acquire() as conn:
         return await conn.fetchrow(
             """
-            SELECT prediction, note, updated_at
+            SELECT prediction, note, post_match_thoughts, updated_at
             FROM user_match_data
             WHERE chat_id = $1
               AND user_id = $2
@@ -332,6 +334,24 @@ async def save_note(pool: asyncpg.Pool, chat_id: int, user_id: int, fixture_id: 
             user_id,
             fixture_id,
             note,
+        )
+
+
+
+async def save_post_match_thoughts(pool: asyncpg.Pool, chat_id: int, user_id: int, fixture_id: int, thoughts: str) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO user_match_data(chat_id, user_id, fixture_id, post_match_thoughts, updated_at)
+            VALUES($1, $2, $3, $4, NOW())
+            ON CONFLICT(chat_id, user_id, fixture_id) DO UPDATE SET
+                post_match_thoughts = EXCLUDED.post_match_thoughts,
+                updated_at = NOW()
+            """,
+            chat_id,
+            user_id,
+            fixture_id,
+            thoughts,
         )
 
 
@@ -511,3 +531,37 @@ async def get_match_card_message(
             fixture_id,
         )
     return int(row["card_message_id"]) if row else None
+
+
+
+async def get_last_match_for_user(pool: asyncpg.Pool, chat_id: int, user_id: int):
+    async with pool.acquire() as conn:
+        return await conn.fetchrow(
+            """
+            SELECT m.*
+            FROM match_card_messages c
+            JOIN matches m ON m.fixture_id = c.fixture_id
+            WHERE c.chat_id = $1
+              AND c.user_id = $2
+            ORDER BY c.updated_at DESC
+            LIMIT 1
+            """,
+            chat_id,
+            user_id,
+        )
+
+
+async def get_matches_for_score_update(pool: asyncpg.Pool, start_utc, end_utc):
+    async with pool.acquire() as conn:
+        return await conn.fetch(
+            """
+            SELECT *
+            FROM matches
+            WHERE kickoff_utc >= $1
+              AND kickoff_utc < $2
+              AND COALESCE(status_short, 'NS') NOT IN ('FT', 'AET', 'PEN')
+            ORDER BY kickoff_utc ASC
+            """,
+            start_utc,
+            end_utc,
+        )
