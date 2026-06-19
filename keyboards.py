@@ -6,7 +6,7 @@ def main_keyboard() -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text="Следующий матч")],
             [KeyboardButton(text="Сегодня"), KeyboardButton(text="Завтра")],
-            [KeyboardButton(text="7 дней"), KeyboardButton(text="Меню")],
+            [KeyboardButton(text="7 дней")],
         ],
         resize_keyboard=True,
         input_field_placeholder="Выбери действие",
@@ -24,9 +24,6 @@ def nav_inline_keyboard(reminders_enabled: bool | None = None) -> InlineKeyboard
                 InlineKeyboardButton(text="Следующий", callback_data="nav:next"),
                 InlineKeyboardButton(text="7 дней", callback_data="nav:week"),
             ],
-            [
-                InlineKeyboardButton(text="Меню", callback_data="nav:menu"),
-            ],
         ]
     )
 
@@ -37,27 +34,30 @@ def match_inline_keyboard(
     has_prediction: bool = False,
     has_note: bool = False,
     has_post_thoughts: bool = False,
+    prediction_locked: bool = False,
 ) -> InlineKeyboardMarkup:
-    prediction_label = "Изменить прогноз" if has_prediction else "Сделать прогноз"
+    if prediction_locked:
+        prediction_label = "Прогноз закрыт"
+        prediction_callback = f"match:prediction_locked:{fixture_id}"
+    else:
+        prediction_label = "Изменить прогноз" if has_prediction else "Сделать прогноз"
+        prediction_callback = f"match:prediction:{fixture_id}"
+
     expectation_label = "Изменить ожидания" if has_note else "Ожидания от матча"
     thoughts_label = "Изменить мысли" if has_post_thoughts else "Мысли после матча"
 
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text=prediction_label, callback_data=f"match:prediction:{fixture_id}"),
+                InlineKeyboardButton(text=prediction_label, callback_data=prediction_callback),
                 InlineKeyboardButton(text=expectation_label, callback_data=f"match:note:{fixture_id}"),
             ],
             [
                 InlineKeyboardButton(text=thoughts_label, callback_data=f"match:post_thoughts:{fixture_id}"),
-                InlineKeyboardButton(text="Показать мои данные", callback_data=f"match:show:{fixture_id}"),
             ],
             [
                 InlineKeyboardButton(text="Сегодня", callback_data="nav:today"),
                 InlineKeyboardButton(text="Следующий", callback_data="nav:next"),
-            ],
-            [
-                InlineKeyboardButton(text="Меню", callback_data="nav:menu"),
             ],
         ]
     )
@@ -86,7 +86,6 @@ def match_list_keyboard(rows, tz, reminders_enabled: bool | None = None) -> Inli
     inline_keyboard.extend([
         [
             InlineKeyboardButton(text="Следующий", callback_data="nav:next"),
-            InlineKeyboardButton(text="Меню", callback_data="nav:menu"),
         ],
     ])
 

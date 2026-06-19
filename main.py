@@ -3,7 +3,7 @@ import logging
 import re
 from difflib import get_close_matches
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
@@ -31,7 +31,7 @@ from local_schedule import load_matches, SCHEDULE_PATH
 from match_card import build_match_card
 from scheduler import setup_scheduler, sync_fixtures
 
-VERSION = "local-schedule-2026-06-19-v20-buttons-hardfix"
+VERSION = "local-schedule-2026-06-19-v21-prediction-lock-buttons"
 
 logging.basicConfig(level=logging.INFO)
 config = load_config()
@@ -114,6 +114,13 @@ def normalize_team_query(query: str) -> str:
 
 def user_id_from_message(message: Message) -> int:
     return message.from_user.id if message.from_user else message.chat.id
+
+
+def match_has_started(row) -> bool:
+    kickoff = row["kickoff_utc"]
+    if kickoff.tzinfo is None:
+        kickoff = kickoff.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) >= kickoff.astimezone(timezone.utc)
 
 
 def parse_reply_marker(message: Message):
@@ -203,6 +210,7 @@ async def send_match_personal_post(
         has_prediction=bool(user_data and user_data["prediction"]),
         has_note=bool(user_data and user_data["note"]),
         has_post_thoughts=bool(user_data and user_data["post_match_thoughts"]),
+        prediction_locked=match_has_started(row),
     )
 
     if source_message_id:
@@ -336,6 +344,10 @@ async def prompt_prediction(message: Message, fixture_id: int, user_id: int, sou
         await message.answer("Не нашёл этот матч в базе.")
         return
 
+    if match_has_started(row):
+        await message.answer("Прогноз уже закрыт. Матч начался, поэтому прогноз изменить нельзя.")
+        return
+
     await db.set_pending_input(pool, message.chat.id, user_id, fixture_id, "prediction", source_message_id)
     logging.info(
         "Pending input set: chat_id=%s user_id=%s fixture_id=%s action=prediction source_message_id=%s",
@@ -455,6 +467,13 @@ async def handle_pending_text(message: Message) -> bool:
             return True
         if len(text) > PREDICTION_MAX_LEN:
             await message.answer(format_prediction_too_long(len(text)))
+            return True
+
+        row = await db.get_match_by_id(pool, fixture_id)
+        if row and match_has_started(row):
+            await db.clear_pending_input(pool, message.chat.id, user_id)
+            await message.answer("Прогноз уже закрыт. Матч начался, поэтому прогноз не сохранён.")
+            await send_match_personal_post(message, row, source_message_id, user_id=user_id)
             return True
 
         await db.save_prediction(pool, message.chat.id, user_id, fixture_id, text)
@@ -674,6 +693,8 @@ async def match_callback(callback: CallbackQuery):
 
     if action == "prediction":
         await prompt_prediction(callback.message, fixture_id, user_id, source_message_id)
+    elif action == "prediction_locked":
+        await callback.message.answer("Прогноз закрыт. Матч уже начался.")
     elif action == "note":
         await prompt_note(callback.message, fixture_id, user_id, source_message_id)
     elif action == "post_thoughts":
