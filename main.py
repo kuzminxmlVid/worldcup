@@ -29,7 +29,7 @@ from local_schedule import load_matches, SCHEDULE_PATH
 from match_card import build_match_card
 from scheduler import setup_scheduler, sync_fixtures
 
-VERSION = "local-schedule-2026-06-17-v15-reminders-team-search"
+VERSION = "local-schedule-2026-06-17-v16-team-search-fallback"
 
 logging.basicConfig(level=logging.INFO)
 config = load_config()
@@ -608,6 +608,26 @@ async def pending_or_unknown_text(message: Message):
     handled = await handle_pending_text(message)
     if handled:
         return
+
+    text = (message.text or "").strip()
+
+    if text.startswith("/"):
+        await message.answer("Не понял команду. Выбери действие кнопками снизу или нажми /menu.", reply_markup=main_keyboard())
+        return
+
+    # Fallback: any free text is treated as a team search.
+    # This protects the UX if Telegram ForceReply is ignored or pending_inputs was lost
+    # after a deploy/restart.
+    if len(text) >= 2:
+        logging.info(
+            "Fallback team search from free text: chat_id=%s user_id=%s query=%s",
+            message.chat.id,
+            user_id_from_message(message),
+            text,
+        )
+        await send_team_search_results(message, text)
+        return
+
     await message.answer("Не понял команду. Выбери действие кнопками снизу или нажми /menu.", reply_markup=main_keyboard())
 
 
