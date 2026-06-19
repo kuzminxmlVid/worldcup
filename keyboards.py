@@ -1,14 +1,13 @@
-
 from aiogram.types import KeyboardButton, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
 
 
 def main_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
+            [KeyboardButton(text="Следующий матч"), KeyboardButton(text="Поиск команды")],
             [KeyboardButton(text="Сегодня"), KeyboardButton(text="Завтра")],
-            [KeyboardButton(text="Следующий матч"), KeyboardButton(text="7 дней")],
-            [KeyboardButton(text="Автопост"), KeyboardButton(text="Обновить")],
-            [KeyboardButton(text="Меню")],
+            [KeyboardButton(text="7 дней"), KeyboardButton(text="Автопост")],
+            [KeyboardButton(text="Обновить"), KeyboardButton(text="Меню")],
         ],
         resize_keyboard=True,
         input_field_placeholder="Выбери действие",
@@ -25,13 +24,16 @@ def nav_inline_keyboard(reminders_enabled: bool | None = None) -> InlineKeyboard
             ],
             [
                 InlineKeyboardButton(text="Следующий", callback_data="nav:next"),
-                InlineKeyboardButton(text="7 дней", callback_data="nav:week"),
+                InlineKeyboardButton(text="Поиск команды", callback_data="nav:team_search"),
             ],
             [
+                InlineKeyboardButton(text="7 дней", callback_data="nav:week"),
                 InlineKeyboardButton(text=alerts_label, callback_data="nav:alerts_toggle"),
-                InlineKeyboardButton(text="Обновить", callback_data="nav:sync"),
             ],
-            [InlineKeyboardButton(text="Меню", callback_data="nav:menu")],
+            [
+                InlineKeyboardButton(text="Обновить", callback_data="nav:sync"),
+                InlineKeyboardButton(text="Меню", callback_data="nav:menu"),
+            ],
         ]
     )
 
@@ -61,7 +63,10 @@ def match_inline_keyboard(
                 InlineKeyboardButton(text="Следующий", callback_data="nav:next"),
             ],
             [
+                InlineKeyboardButton(text="Поиск команды", callback_data="nav:team_search"),
                 InlineKeyboardButton(text=alerts_label, callback_data="nav:alerts_toggle"),
+            ],
+            [
                 InlineKeyboardButton(text="Меню", callback_data="nav:menu"),
             ],
         ]

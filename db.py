@@ -391,3 +391,35 @@ async def clear_pending_input(pool: asyncpg.Pool, chat_id: int, user_id: int) ->
             chat_id,
             user_id,
         )
+
+
+
+async def search_matches_by_team(pool: asyncpg.Pool, query: str):
+    pattern = f"%{query.strip()}%"
+    async with pool.acquire() as conn:
+        return await conn.fetch(
+            """
+            SELECT *
+            FROM matches
+            WHERE home_team ILIKE $1
+               OR away_team ILIKE $1
+            ORDER BY kickoff_utc ASC
+            """,
+            pattern,
+        )
+
+
+async def get_all_team_names(pool: asyncpg.Pool) -> list[str]:
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT team
+            FROM (
+                SELECT home_team AS team FROM matches
+                UNION
+                SELECT away_team AS team FROM matches
+            ) teams
+            ORDER BY team ASC
+            """
+        )
+    return [r["team"] for r in rows]

@@ -1,25 +1,25 @@
-Patch: prediction/note pending input fix
+Patch: reminders fix + team search
 
-Replace only this file:
+Replace these files:
 - main.py
+- db.py
+- keyboards.py
+- formatting.py
+- scheduler.py
 
 What changed:
-- prediction and note are now stored under the real Telegram user id
-- replies use ForceReply, so Telegram clearly ties the next user message to the prompt
-- if the database pending state is not found, bot can recover the action from the reply marker
-- added logging for pending input set/found/recovered
-- Show/Clear buttons now use the real callback user id
+- fixed one-hour reminders so one Telegram send error does not kill the whole scheduler job
+- reminders now check a 50-70 minute window before kickoff to avoid missing matches during deploy/restart delays
+- added logs for reminder checks and successful/failed sends
+- added button: Поиск команды
+- added commands: /team and /search
+- search supports team names in English and common Russian names, for example Португалия, Бразилия, Конго, США
+- search returns all matches for the team: played and future
 
-After redeploy:
+After deploy:
 1. Press /start
-2. Press /next
-3. Press Сделать прогноз
-4. Reply to the bot prompt or just type the forecast
-5. Press Добавить заметку
-6. Reply to the bot prompt or just type the note
-
-If it still fails, send logs containing lines with:
-- Pending input set
-- Pending input found in DB
-- Pending input recovered from reply marker
-- No pending input found
+2. Press Поиск команды
+3. Type Португалия or Portugal
+4. Check Railway logs for lines like:
+   Checking hour reminders...
+   Hour reminder sent...

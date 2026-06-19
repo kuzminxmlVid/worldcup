@@ -241,7 +241,7 @@ def help_text(reminders_enabled: bool | None = True) -> str:
         "• Расписание на 7 дней\n"
         "• Автопост за час до матча\n\n"
         f"Сейчас автопост: {status}.\n"
-        "Можно пользоваться кнопками снизу или командами /today /tomorrow /next /week /sync /alerts"
+        "Можно пользоваться кнопками снизу или командами /today /tomorrow /next /week /team /sync /alerts"
     )
 
 

@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import re
+from difflib import get_close_matches
 from pathlib import Path
 from datetime import datetime, timedelta
 
@@ -28,7 +29,7 @@ from local_schedule import load_matches, SCHEDULE_PATH
 from match_card import build_match_card
 from scheduler import setup_scheduler, sync_fixtures
 
-VERSION = "local-schedule-2026-06-17-v14-pending-fix-force-reply"
+VERSION = "local-schedule-2026-06-17-v15-reminders-team-search"
 
 logging.basicConfig(level=logging.INFO)
 config = load_config()
@@ -36,7 +37,77 @@ bot = Bot(token=config.bot_token)
 dp = Dispatcher()
 pool = None
 
-REPLY_MARKER_RE = re.compile(r"Код:\s*(prediction|note):(\d+):(\d+)")
+REPLY_MARKER_RE = re.compile(r"Код:\s*(prediction|note|team_search):(\d+):(\d+)")
+
+TEAM_ALIASES = {
+    "алжир": "Algeria",
+    "аргентина": "Argentina",
+    "австралия": "Australia",
+    "австрия": "Austria",
+    "бельгия": "Belgium",
+    "босния": "Bosnia & Herzegovina",
+    "босния и герцеговина": "Bosnia & Herzegovina",
+    "бразилия": "Brazil",
+    "канада": "Canada",
+    "кабо верде": "Cape Verde",
+    "кабо-верде": "Cape Verde",
+    "колумбия": "Colombia",
+    "хорватия": "Croatia",
+    "кюрасао": "Curaçao",
+    "чехия": "Czech Republic",
+    "чешская республика": "Czech Republic",
+    "др конго": "DR Congo",
+    "д р конго": "DR Congo",
+    "конго": "DR Congo",
+    "демократическая республика конго": "DR Congo",
+    "эквадор": "Ecuador",
+    "египет": "Egypt",
+    "англия": "England",
+    "франция": "France",
+    "германия": "Germany",
+    "гана": "Ghana",
+    "гаити": "Haiti",
+    "иран": "Iran",
+    "ирак": "Iraq",
+    "кот д ивуар": "Ivory Coast",
+    "кот-д'ивуар": "Ivory Coast",
+    "кот-д’ивуар": "Ivory Coast",
+    "япония": "Japan",
+    "иордания": "Jordan",
+    "мексика": "Mexico",
+    "марокко": "Morocco",
+    "нидерланды": "Netherlands",
+    "голландия": "Netherlands",
+    "новая зеландия": "New Zealand",
+    "норвегия": "Norway",
+    "панама": "Panama",
+    "парагвай": "Paraguay",
+    "португалия": "Portugal",
+    "катар": "Qatar",
+    "саудовская аравия": "Saudi Arabia",
+    "саудовская": "Saudi Arabia",
+    "шотландия": "Scotland",
+    "сенегал": "Senegal",
+    "юар": "South Africa",
+    "южная африка": "South Africa",
+    "южная корея": "South Korea",
+    "корея": "South Korea",
+    "испания": "Spain",
+    "швеция": "Sweden",
+    "швейцария": "Switzerland",
+    "тунис": "Tunisia",
+    "турция": "Turkey",
+    "сша": "USA",
+    "америка": "USA",
+    "уругвай": "Uruguay",
+    "узбекистан": "Uzbekistan",
+}
+
+
+def normalize_team_query(query: str) -> str:
+    cleaned = " ".join(query.strip().lower().replace("ё", "е").split())
+    return TEAM_ALIASES.get(cleaned, query.strip())
+
 
 
 def user_id_from_message(message: Message) -> int:
@@ -182,6 +253,57 @@ async def toggle_alerts(message: Message):
     await message.answer(format_alerts_status(new_value), reply_markup=nav_inline_keyboard(new_value))
 
 
+
+async def prompt_team_search(message: Message, user_id: int):
+    await db.set_pending_input(pool, message.chat.id, user_id, 0, "team_search", None)
+    logging.info(
+        "Pending input set: chat_id=%s user_id=%s action=team_search",
+        message.chat.id,
+        user_id,
+    )
+
+    await message.answer(
+        "Напиши название сборной одним сообщением.\n\n"
+        "Например: Португалия, Brazil, USA, Конго.\n"
+        "Я покажу все матчи этой команды: сыгранные и будущие.\n\n"
+        "Код: team_search:0:0",
+        reply_markup=ForceReply(selective=True, input_field_placeholder="Название команды"),
+    )
+
+
+async def send_team_search_results(message: Message, query: str):
+    raw_query = query.strip()
+
+    if len(raw_query) < 2:
+        await message.answer("Слишком короткий запрос. Напиши хотя бы 2 символа.")
+        return
+
+    normalized = normalize_team_query(raw_query)
+    rows = await db.search_matches_by_team(pool, normalized)
+
+    if rows:
+        title = f"Матчи команды: {normalized}"
+        await send_text(message, format_matches(title, rows, config.app_tz))
+        return
+
+    names = await db.get_all_team_names(pool)
+    suggestions = get_close_matches(normalized, names, n=6, cutoff=0.25)
+
+    if suggestions:
+        await message.answer(
+            "Матчи не нашёл.\n\n"
+            "Возможно, ты имел в виду:\n"
+            + "\n".join(f"• {name}" for name in suggestions)
+            + "\n\nНажми «Поиск команды» и попробуй ещё раз.",
+            reply_markup=main_keyboard(),
+        )
+    else:
+        await message.answer(
+            "Матчи по этой команде не нашёл.\n\n"
+            "Попробуй написать название на английском, например: Portugal, Brazil, USA.",
+            reply_markup=main_keyboard(),
+        )
+
 async def prompt_prediction(message: Message, fixture_id: int, user_id: int, source_message_id: int | None = None):
     row = await db.get_match_by_id(pool, fixture_id)
     if not row:
@@ -272,6 +394,11 @@ async def handle_pending_text(message: Message) -> bool:
 
     text = message.text.strip()
 
+    if action == "team_search":
+        await db.clear_pending_input(pool, message.chat.id, user_id)
+        await send_team_search_results(message, text)
+        return True
+
     if action == "prediction":
         if not text:
             await message.answer("Пустой прогноз не сохраняю. Пришли прогноз текстом.")
@@ -316,6 +443,15 @@ async def start(message: Message):
 async def menu(message: Message):
     enabled = await reminders_enabled_for(message.chat.id)
     await message.answer(help_text(enabled), reply_markup=main_keyboard())
+
+
+
+
+@dp.message(Command("team"))
+@dp.message(Command("search"))
+@dp.message(F.text == "Поиск команды")
+async def team_search(message: Message):
+    await prompt_team_search(message, user_id_from_message(message))
 
 
 @dp.message(Command("alerts"))
@@ -421,6 +557,8 @@ async def nav_callback(callback: CallbackQuery):
         await send_next_match_text(callback.message)
     elif action == "week":
         await send_week_text(callback.message)
+    elif action == "team_search":
+        await prompt_team_search(callback.message, callback.from_user.id)
     elif action == "sync":
         await sync(callback.message)
     elif action == "menu":
@@ -441,6 +579,11 @@ async def match_callback(callback: CallbackQuery):
     source_message_id = callback.message.message_id if callback.message else None
     user_id = callback.from_user.id
     await callback.answer()
+
+    if action == "team_search":
+        await db.clear_pending_input(pool, message.chat.id, user_id)
+        await send_team_search_results(message, text)
+        return True
 
     if action == "prediction":
         await prompt_prediction(callback.message, fixture_id, user_id, source_message_id)
