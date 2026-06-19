@@ -24,12 +24,12 @@ from formatting import (
     split_telegram_text,
     help_text,
 )
-from keyboards import main_keyboard, nav_inline_keyboard, match_inline_keyboard
+from keyboards import main_keyboard, nav_inline_keyboard, match_inline_keyboard, match_list_keyboard
 from local_schedule import load_matches, SCHEDULE_PATH
 from match_card import build_match_card
 from scheduler import setup_scheduler, sync_fixtures
 
-VERSION = "local-schedule-2026-06-17-v16-team-search-fallback"
+VERSION = "local-schedule-2026-06-17-v17-open-any-match"
 
 logging.basicConfig(level=logging.INFO)
 config = load_config()
@@ -145,18 +145,32 @@ async def send_text(message: Message, text: str):
         await message.answer(part, reply_markup=markup)
 
 
+async def send_matches_with_buttons(message: Message, title: str, rows):
+    enabled = await reminders_enabled_for(message.chat.id)
+    text = format_matches(title, rows, config.app_tz)
+
+    if not rows:
+        await message.answer(text, reply_markup=nav_inline_keyboard(enabled))
+        return
+
+    parts = split_telegram_text(text)
+    for i, part in enumerate(parts):
+        markup = match_list_keyboard(rows, config.app_tz, enabled) if i == len(parts) - 1 else None
+        await message.answer(part, reply_markup=markup)
+
+
 async def send_today_text(message: Message):
     day = datetime.now(config.app_tz).date()
     start_utc, end_utc = day_bounds_utc(day, config.app_tz)
     rows = await db.get_matches_between(pool, start_utc, end_utc)
-    await send_text(message, format_matches("Матчи ЧМ сегодня", rows, config.app_tz))
+    await send_matches_with_buttons(message, "Матчи ЧМ сегодня", rows)
 
 
 async def send_tomorrow_text(message: Message):
     day = datetime.now(config.app_tz).date() + timedelta(days=1)
     start_utc, end_utc = day_bounds_utc(day, config.app_tz)
     rows = await db.get_matches_between(pool, start_utc, end_utc)
-    await send_text(message, format_matches("Матчи ЧМ завтра", rows, config.app_tz))
+    await send_matches_with_buttons(message, "Матчи ЧМ завтра", rows)
 
 
 async def send_week_text(message: Message):
@@ -164,7 +178,7 @@ async def send_week_text(message: Message):
     start_utc, _ = day_bounds_utc(today_local, config.app_tz)
     _, end_utc = day_bounds_utc(today_local + timedelta(days=7), config.app_tz)
     rows = await db.get_matches_between(pool, start_utc, end_utc)
-    await send_text(message, format_matches("Матчи ЧМ на 7 дней", rows, config.app_tz))
+    await send_matches_with_buttons(message, "Матчи ЧМ на 7 дней", rows)
 
 
 async def send_match_personal_post(
@@ -203,7 +217,7 @@ async def send_match_personal_post(
     await message.answer(text, reply_markup=markup)
 
 
-async def send_match_by_id(message: Message, fixture_id: int):
+async def send_match_by_id(message: Message, fixture_id: int, user_id: int | None = None):
     row = await db.get_match_by_id(pool, fixture_id)
     if not row:
         await message.answer("Не нашёл этот матч в базе. Попробуй /sync и потом /next.")
@@ -218,16 +232,16 @@ async def send_match_by_id(message: Message, fixture_id: int):
         except Exception:
             pass
 
-    await send_match_personal_post(message, row, user_id=user_id_from_message(message))
+    await send_match_personal_post(message, row, user_id=user_id or user_id_from_message(message))
 
 
-async def send_next_match_text(message: Message):
+async def send_next_match_text(message: Message, user_id: int | None = None):
     row = await db.get_next_match(pool)
     if not row:
         enabled = await reminders_enabled_for(message.chat.id)
         await message.answer("Ближайших матчей после текущего времени нет.", reply_markup=nav_inline_keyboard(enabled))
         return
-    await send_match_by_id(message, row["fixture_id"])
+    await send_match_by_id(message, row["fixture_id"], user_id=user_id)
 
 
 async def send_source_text(message: Message):
@@ -283,7 +297,7 @@ async def send_team_search_results(message: Message, query: str):
 
     if rows:
         title = f"Матчи команды: {normalized}"
-        await send_text(message, format_matches(title, rows, config.app_tz))
+        await send_matches_with_buttons(message, title, rows)
         return
 
     names = await db.get_all_team_names(pool)
@@ -393,11 +407,6 @@ async def handle_pending_text(message: Message) -> bool:
         )
 
     text = message.text.strip()
-
-    if action == "team_search":
-        await db.clear_pending_input(pool, message.chat.id, user_id)
-        await send_team_search_results(message, text)
-        return True
 
     if action == "prediction":
         if not text:
@@ -554,7 +563,7 @@ async def nav_callback(callback: CallbackQuery):
     elif action == "tomorrow":
         await send_tomorrow_text(callback.message)
     elif action == "next":
-        await send_next_match_text(callback.message)
+        await send_next_match_text(callback.message, user_id=callback.from_user.id)
     elif action == "week":
         await send_week_text(callback.message)
     elif action == "team_search":
@@ -565,6 +574,19 @@ async def nav_callback(callback: CallbackQuery):
         await menu(callback.message)
     elif action == "alerts_toggle":
         await toggle_alerts(callback.message)
+
+
+
+@dp.callback_query(F.data.startswith("open_match:"))
+async def open_match_callback(callback: CallbackQuery):
+    try:
+        fixture_id = int(callback.data.split(":", 1)[1])
+    except (ValueError, IndexError):
+        await callback.answer("Не понял матч.")
+        return
+
+    await callback.answer()
+    await send_match_by_id(callback.message, fixture_id, user_id=callback.from_user.id)
 
 
 @dp.callback_query(F.data.startswith("match:"))
@@ -579,11 +601,6 @@ async def match_callback(callback: CallbackQuery):
     source_message_id = callback.message.message_id if callback.message else None
     user_id = callback.from_user.id
     await callback.answer()
-
-    if action == "team_search":
-        await db.clear_pending_input(pool, message.chat.id, user_id)
-        await send_team_search_results(message, text)
-        return True
 
     if action == "prediction":
         await prompt_prediction(callback.message, fixture_id, user_id, source_message_id)

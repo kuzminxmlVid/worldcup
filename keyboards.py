@@ -71,3 +71,40 @@ def match_inline_keyboard(
             ],
         ]
     )
+
+
+def match_list_keyboard(rows, tz, reminders_enabled: bool | None = None) -> InlineKeyboardMarkup:
+    inline_keyboard = []
+
+    for row in rows:
+        kickoff = row["kickoff_utc"].astimezone(tz)
+        button_text = (
+            f"{kickoff.strftime('%d.%m %H:%M')} · "
+            f"{row['home_team']} — {row['away_team']}"
+        )
+
+        # Telegram кнопки лучше держать короткими.
+        if len(button_text) > 60:
+            button_text = button_text[:57].rstrip() + "..."
+
+        inline_keyboard.append([
+            InlineKeyboardButton(
+                text=button_text,
+                callback_data=f"open_match:{row['fixture_id']}",
+            )
+        ])
+
+    alerts_label = "Автопост: вкл" if reminders_enabled else "Автопост: выкл"
+
+    inline_keyboard.extend([
+        [
+            InlineKeyboardButton(text="Следующий", callback_data="nav:next"),
+            InlineKeyboardButton(text="Поиск команды", callback_data="nav:team_search"),
+        ],
+        [
+            InlineKeyboardButton(text=alerts_label, callback_data="nav:alerts_toggle"),
+            InlineKeyboardButton(text="Меню", callback_data="nav:menu"),
+        ],
+    ])
+
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
