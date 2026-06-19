@@ -290,7 +290,7 @@ def help_text(reminders_enabled: bool | None = True) -> str:
         "• Автопост за час до матча через /alerts\n"
         "• Очистка данных последнего открытого матча через /clear\n\n"
         f"Сейчас автопост: {status}.\n"
-        "Команды: /today /tomorrow /next /week /team /search /alerts /clear /sync"
+        "Команды: /today /tomorrow /next /week /team /teams /search /alerts /clear /sync"
     )
 
 
