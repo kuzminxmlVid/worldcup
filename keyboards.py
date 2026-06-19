@@ -55,7 +55,10 @@ def match_inline_keyboard(
                 InlineKeyboardButton(text=note_label, callback_data=f"match:note:{fixture_id}"),
             ],
             [
+                InlineKeyboardButton(text="Узнать счёт", callback_data=f"match:score:{fixture_id}"),
                 InlineKeyboardButton(text="Показать мои данные", callback_data=f"match:show:{fixture_id}"),
+            ],
+            [
                 InlineKeyboardButton(text="Очистить", callback_data=f"match:clear:{fixture_id}"),
             ],
             [

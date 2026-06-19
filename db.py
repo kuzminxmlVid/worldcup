@@ -52,6 +52,15 @@ CREATE TABLE IF NOT EXISTS pending_inputs (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (chat_id, user_id)
 );
+
+CREATE TABLE IF NOT EXISTS match_card_messages (
+    chat_id BIGINT NOT NULL,
+    user_id BIGINT NOT NULL,
+    fixture_id BIGINT NOT NULL,
+    card_message_id BIGINT NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (chat_id, user_id, fixture_id)
+);
 """
 
 
@@ -64,6 +73,8 @@ async def init_db(pool: asyncpg.Pool) -> None:
         await conn.execute(CREATE_TABLES_SQL)
         await conn.execute("ALTER TABLE chats ADD COLUMN IF NOT EXISTS reminders_enabled BOOLEAN NOT NULL DEFAULT TRUE")
         await conn.execute("ALTER TABLE pending_inputs ADD COLUMN IF NOT EXISTS source_message_id BIGINT")
+        await conn.execute("ALTER TABLE matches ADD COLUMN IF NOT EXISTS api_fixture_id BIGINT")
+        await conn.execute("ALTER TABLE matches ADD COLUMN IF NOT EXISTS score_checked_at TIMESTAMPTZ")
 
 
 async def add_chat(pool: asyncpg.Pool, chat_id: int) -> None:
@@ -423,3 +434,80 @@ async def get_all_team_names(pool: asyncpg.Pool) -> list[str]:
             """
         )
     return [r["team"] for r in rows]
+
+
+
+async def update_match_score(
+    pool: asyncpg.Pool,
+    fixture_id: int,
+    api_fixture_id: int | None,
+    status_short: str | None,
+    status_long: str | None,
+    home_goals: int | None,
+    away_goals: int | None,
+) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            UPDATE matches
+            SET api_fixture_id = COALESCE($2, api_fixture_id),
+                status_short = COALESCE($3, status_short),
+                status_long = COALESCE($4, status_long),
+                home_goals = $5,
+                away_goals = $6,
+                score_checked_at = NOW(),
+                updated_at = NOW()
+            WHERE fixture_id = $1
+            """,
+            fixture_id,
+            api_fixture_id,
+            status_short,
+            status_long,
+            home_goals,
+            away_goals,
+        )
+
+
+async def save_match_card_message(
+    pool: asyncpg.Pool,
+    chat_id: int,
+    user_id: int,
+    fixture_id: int,
+    card_message_id: int,
+) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO match_card_messages(chat_id, user_id, fixture_id, card_message_id, updated_at)
+            VALUES($1, $2, $3, $4, NOW())
+            ON CONFLICT(chat_id, user_id, fixture_id) DO UPDATE SET
+                card_message_id = EXCLUDED.card_message_id,
+                updated_at = NOW()
+            """,
+            chat_id,
+            user_id,
+            fixture_id,
+            card_message_id,
+        )
+
+
+async def get_match_card_message(
+    pool: asyncpg.Pool,
+    chat_id: int,
+    user_id: int,
+    fixture_id: int,
+) -> int | None:
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT card_message_id
+            FROM match_card_messages
+            WHERE chat_id = $1
+              AND user_id = $2
+              AND fixture_id = $3
+            """,
+            chat_id,
+            user_id,
+            fixture_id,
+        )
+    return int(row["card_message_id"]) if row else None

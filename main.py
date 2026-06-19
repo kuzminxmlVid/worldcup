@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
-from aiogram.types import Message, CallbackQuery, FSInputFile, ForceReply
+from aiogram.types import Message, CallbackQuery, FSInputFile, ForceReply, InputMediaPhoto
 
 import db
 from config import load_config
@@ -27,9 +27,10 @@ from formatting import (
 from keyboards import main_keyboard, nav_inline_keyboard, match_inline_keyboard, match_list_keyboard
 from local_schedule import load_matches, SCHEDULE_PATH
 from match_card import build_match_card
+from api_football import ApiFootballError, fetch_score_for_match
 from scheduler import setup_scheduler, sync_fixtures
 
-VERSION = "local-schedule-2026-06-17-v17-open-any-match"
+VERSION = "local-schedule-2026-06-17-v18-score-api"
 
 logging.basicConfig(level=logging.INFO)
 config = load_config()
@@ -223,16 +224,25 @@ async def send_match_by_id(message: Message, fixture_id: int, user_id: int | Non
         await message.answer("Не нашёл этот матч в базе. Попробуй /sync и потом /next.")
         return
 
+    actual_user_id = user_id or user_id_from_message(message)
+
     card_path = build_match_card(row, config.app_tz)
     try:
-        await message.answer_photo(FSInputFile(card_path), caption="Следующий матч ЧМ")
+        sent_card = await message.answer_photo(FSInputFile(card_path), caption="Карточка матча")
+        await db.save_match_card_message(
+            pool,
+            message.chat.id,
+            actual_user_id,
+            row["fixture_id"],
+            sent_card.message_id,
+        )
     finally:
         try:
             Path(card_path).unlink(missing_ok=True)
         except Exception:
             pass
 
-    await send_match_personal_post(message, row, user_id=user_id or user_id_from_message(message))
+    await send_match_personal_post(message, row, user_id=actual_user_id)
 
 
 async def send_next_match_text(message: Message, user_id: int | None = None):
@@ -266,6 +276,77 @@ async def toggle_alerts(message: Message):
     new_value = await db.toggle_reminders(pool, message.chat.id)
     await message.answer(format_alerts_status(new_value), reply_markup=nav_inline_keyboard(new_value))
 
+
+
+async def refresh_match_score(
+    message: Message,
+    fixture_id: int,
+    user_id: int,
+    source_message_id: int | None = None,
+):
+    row = await db.get_match_by_id(pool, fixture_id)
+    if not row:
+        await message.answer("Не нашёл этот матч в базе.")
+        return
+
+    await message.answer("Запрашиваю счёт...")
+
+    try:
+        score = await fetch_score_for_match(row)
+    except ApiFootballError as e:
+        await message.answer(f"Не получилось получить счёт: {e}")
+        return
+    except Exception as e:
+        logging.exception("Unexpected score refresh error")
+        await message.answer(f"Не получилось получить счёт: {e}")
+        return
+
+    await db.update_match_score(
+        pool,
+        fixture_id=fixture_id,
+        api_fixture_id=score.get("api_fixture_id"),
+        status_short=score.get("status_short"),
+        status_long=score.get("status_long"),
+        home_goals=score.get("home_goals"),
+        away_goals=score.get("away_goals"),
+    )
+
+    updated_row = await db.get_match_by_id(pool, fixture_id)
+    card_path = build_match_card(updated_row, config.app_tz)
+
+    try:
+        card_message_id = await db.get_match_card_message(
+            pool,
+            message.chat.id,
+            user_id,
+            fixture_id,
+        )
+
+        if card_message_id:
+            try:
+                await bot.edit_message_media(
+                    chat_id=message.chat.id,
+                    message_id=card_message_id,
+                    media=InputMediaPhoto(
+                        media=FSInputFile(card_path),
+                        caption="Карточка матча",
+                    ),
+                )
+            except Exception:
+                logging.exception("Could not edit score card, sending a new one")
+                sent_card = await message.answer_photo(FSInputFile(card_path), caption="Карточка матча")
+                await db.save_match_card_message(pool, message.chat.id, user_id, fixture_id, sent_card.message_id)
+        else:
+            sent_card = await message.answer_photo(FSInputFile(card_path), caption="Карточка матча")
+            await db.save_match_card_message(pool, message.chat.id, user_id, fixture_id, sent_card.message_id)
+
+    finally:
+        try:
+            Path(card_path).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    await send_match_personal_post(message, updated_row, source_message_id, user_id=user_id)
 
 
 async def prompt_team_search(message: Message, user_id: int):
@@ -606,6 +687,8 @@ async def match_callback(callback: CallbackQuery):
         await prompt_prediction(callback.message, fixture_id, user_id, source_message_id)
     elif action == "note":
         await prompt_note(callback.message, fixture_id, user_id, source_message_id)
+    elif action == "score":
+        await refresh_match_score(callback.message, fixture_id, user_id, source_message_id)
     elif action == "show":
         row = await db.get_match_by_id(pool, fixture_id)
         if row:

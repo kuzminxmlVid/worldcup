@@ -261,6 +261,36 @@ def _draw_clock_icon(draw, x, y, size, accent):
     draw.line((cx, cy, x + size * 0.72, y + size * 0.64), fill=(235, 240, 248, 255), width=3)
 
 
+
+def _row_get(row, key, default=None):
+    try:
+        return row.get(key, default)
+    except AttributeError:
+        try:
+            value = row[key]
+            return value if value is not None else default
+        except Exception:
+            return default
+
+
+def _score_label(row) -> tuple[str, str]:
+    home_goals = _row_get(row, "home_goals")
+    away_goals = _row_get(row, "away_goals")
+    status_short = _row_get(row, "status_short")
+    status_long = _row_get(row, "status_long")
+
+    if home_goals is None or away_goals is None:
+        if status_short in ("NS", "TBD") or not status_short:
+            return "VS", "SCHEDULED"
+        return "VS", str(status_long or status_short).upper()
+
+    score = f"{home_goals}:{away_goals}"
+    if status_short in ("FT", "AET", "PEN"):
+        return score, "FULL TIME"
+    if status_short in ("1H", "2H", "HT", "ET", "BT", "P", "LIVE"):
+        return score, "LIVE"
+    return score, str(status_long or status_short or "SCORE").upper()
+
 def build_match_card(row, tz: ZoneInfo) -> str:
     width, height = 1600, 1200
     img = _vertical_gradient((width, height), (6, 17, 38), (3, 8, 22))
@@ -299,6 +329,14 @@ def build_match_card(row, tz: ZoneInfo) -> str:
     draw.text((282, 186), kickoff.strftime("%d.%m.%Y"), font=info_font, fill=white)
     draw.text((618, 186), kickoff.strftime("%H:%M"), font=info_font, fill=white)
 
+    center_label, status_label = _score_label(row)
+    if status_label and center_label != "VS":
+        status_font = _font(FONT_BOLD, 24)
+        status_w = draw.textlength(status_label, font=status_font)
+        status_box = (825, 178, 825 + int(status_w) + 44, 228)
+        _panel(draw, status_box, (18, 24, 42, 255), gold, radius=16, width=2)
+        draw.text((status_box[0] + 22, 190), status_label, font=status_font, fill=gold)
+
     stage = _safe_group_label(row.get("group_name") or row.get("round_name"))
     stage_w = draw.textlength(stage, font=group_font)
     stage_box = (width - 70 - int(stage_w) - 84, 122, width - 108, 202)
@@ -334,15 +372,24 @@ def build_match_card(row, tz: ZoneInfo) -> str:
     draw.text((377 - lw / 2, 810), left_name, font=name_font_left, fill=white)
     draw.text((1222 - rw / 2, 810), right_name, font=name_font_right, fill=white)
 
-    medal_size = 184
+    medal_size = 220 if center_label != "VS" else 184
     medal = Image.new("RGBA", (medal_size, medal_size), (0, 0, 0, 0))
     md = ImageDraw.Draw(medal)
     md.ellipse((0, 0, medal_size - 1, medal_size - 1), fill=(18, 26, 42, 255), outline=gold, width=6)
     md.ellipse((18, 18, medal_size - 19, medal_size - 19), outline=gold_soft, width=3)
-    md.ellipse((42, 42, medal_size - 43, medal_size - 43), outline=(78, 115, 165, 255), width=2)
-    vs_font = _font(FONT_BOLD, 70)
-    vs_w = md.textlength("VS", font=vs_font)
-    md.text((medal_size / 2 - vs_w / 2, 52), "VS", font=vs_font, fill=gold)
+    md.ellipse((46, 46, medal_size - 47, medal_size - 47), outline=(78, 115, 165, 255), width=2)
+
+    center_font_size = 78 if center_label != "VS" else 70
+    center_font = _font(FONT_BOLD, center_font_size)
+    center_w = md.textlength(center_label, font=center_font)
+    md.text((medal_size / 2 - center_w / 2, medal_size / 2 - center_font_size / 2 - 4), center_label, font=center_font, fill=gold)
+
+    if center_label != "VS":
+        status_small = status_label[:18]
+        status_font = _font(FONT_BOLD, 22)
+        status_w = md.textlength(status_small, font=status_font)
+        md.text((medal_size / 2 - status_w / 2, medal_size / 2 + 52), status_small, font=status_font, fill=(242, 245, 250, 255))
+
     img.alpha_composite(medal, (mid_x - medal_size // 2, 525 - medal_size // 2))
 
     for dx, dy in [(0, -100), (0, 100), (-100, 0), (100, 0)]:
