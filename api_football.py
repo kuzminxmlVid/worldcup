@@ -309,3 +309,59 @@ def _fetch_score_sync(local_row) -> dict:
 
 async def fetch_score_for_match(local_row) -> dict:
     return await asyncio.to_thread(_fetch_score_sync, local_row)
+
+
+
+def _event_dates_for_row(row) -> list[str]:
+    kickoff = _row_get(row, "kickoff_utc")
+    if kickoff is None:
+        return []
+
+    if kickoff.tzinfo is None:
+        kickoff = kickoff.replace(tzinfo=timezone.utc)
+
+    base_date = kickoff.astimezone(timezone.utc).date()
+    return [
+        base_date.strftime("%Y%m%d"),
+        (base_date - timedelta(days=1)).strftime("%Y%m%d"),
+        (base_date + timedelta(days=1)).strftime("%Y%m%d"),
+    ]
+
+
+def _fetch_scores_for_matches_sync(rows) -> dict[int, dict]:
+    rows = list(rows)
+    if not rows:
+        return {}
+
+    events_by_date: dict[str, list[dict]] = {}
+
+    # Fetch each date once. This is much cheaper than one API request per match.
+    dates = []
+    for row in rows:
+        for date in _event_dates_for_row(row):
+            if date not in dates:
+                dates.append(date)
+
+    for date in dates:
+        events_by_date[date] = _request_scoreboard({"dates": date, "limit": 100})
+
+    results: dict[int, dict] = {}
+
+    for row in rows:
+        fixture_id = _row_get(row, "fixture_id")
+        if fixture_id is None:
+            continue
+
+        candidate_events = []
+        for date in _event_dates_for_row(row):
+            candidate_events.extend(events_by_date.get(date, []))
+
+        found = _best_event_match(row, candidate_events)
+        if found:
+            results[int(fixture_id)] = found
+
+    return results
+
+
+async def fetch_scores_for_matches(rows) -> dict[int, dict]:
+    return await asyncio.to_thread(_fetch_scores_for_matches_sync, rows)

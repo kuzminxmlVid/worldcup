@@ -29,9 +29,9 @@ from formatting import (
 from keyboards import main_keyboard, nav_inline_keyboard, match_inline_keyboard, match_list_keyboard
 from local_schedule import load_matches, SCHEDULE_PATH
 from match_card import build_match_card
-from scheduler import setup_scheduler, sync_fixtures
+from scheduler import setup_scheduler, sync_fixtures, sync_played_scores
 
-VERSION = "local-schedule-2026-06-19-v21-prediction-lock-buttons"
+VERSION = "local-schedule-2026-06-19-v22-open-score-backfill"
 
 logging.basicConfig(level=logging.INFO)
 config = load_config()
@@ -588,6 +588,17 @@ async def sync(message: Message):
         await message.answer(f"Не получилось обновить расписание: {e}", reply_markup=nav_inline_keyboard(enabled))
 
 
+@dp.message(Command("sync_scores"))
+async def sync_scores(message: Message):
+    await message.answer("Обновляю счёт сыгранных матчей...")
+    try:
+        updated = await sync_played_scores(pool)
+        await message.answer(f"Готово. Обновлено матчей: {updated}.")
+    except Exception as e:
+        logging.exception("Scores sync failed")
+        await message.answer(f"Не получилось обновить счёт: {e}")
+
+
 @dp.message(Command("today"))
 async def today(message: Message):
     await send_today_text(message)
@@ -753,6 +764,13 @@ async def main():
         logging.info("Initial local schedule sync complete. Matches: %s", count)
     except Exception:
         logging.exception("Initial sync failed")
+
+    try:
+        updated_scores = await sync_played_scores(pool)
+        logging.info("Initial played scores sync complete. Updated: %s", updated_scores)
+    except Exception:
+        logging.exception("Initial played scores sync failed")
+
     scheduler = setup_scheduler(bot, pool, config)
     scheduler.start()
     await dp.start_polling(bot)

@@ -6,7 +6,7 @@ from aiogram.types import FSInputFile
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 import db
-from api_football import ApiFootballError, fetch_score_for_match
+from api_football import ApiFootballError, fetch_score_for_match, fetch_scores_for_matches
 from formatting import day_bounds_utc, format_matches, format_reminder, split_telegram_text
 from keyboards import nav_inline_keyboard
 from local_schedule import load_matches
@@ -16,6 +16,60 @@ from match_card import build_match_card
 async def sync_fixtures(pool) -> int:
     matches = load_matches()
     return await db.replace_matches(pool, matches)
+
+
+async def sync_played_scores(pool) -> int:
+    rows = await db.get_matches_for_score_backfill(pool)
+
+    logging.info("Backfilling played match scores: rows=%s", len(rows))
+
+    if not rows:
+        return 0
+
+    try:
+        scores_by_fixture_id = await fetch_scores_for_matches(rows)
+    except ApiFootballError:
+        logging.exception("Played scores backfill failed")
+        return 0
+    except Exception:
+        logging.exception("Unexpected played scores backfill error")
+        return 0
+
+    updated = 0
+
+    for row in rows:
+        fixture_id = row["fixture_id"]
+        score = scores_by_fixture_id.get(fixture_id)
+        if not score:
+            logging.info(
+                "No score found for fixture_id=%s %s - %s",
+                fixture_id,
+                row["home_team"],
+                row["away_team"],
+            )
+            continue
+
+        await db.update_match_score(
+            pool,
+            fixture_id=fixture_id,
+            api_fixture_id=score.get("api_fixture_id"),
+            status_short=score.get("status_short"),
+            status_long=score.get("status_long"),
+            home_goals=score.get("home_goals"),
+            away_goals=score.get("away_goals"),
+        )
+        updated += 1
+
+        logging.info(
+            "Played score updated: fixture_id=%s %s %s:%s %s",
+            fixture_id,
+            row["home_team"],
+            score.get("home_goals"),
+            score.get("away_goals"),
+            row["away_team"],
+        )
+
+    return updated
 
 
 async def sync_recent_scores(pool) -> None:
@@ -170,6 +224,16 @@ def setup_scheduler(bot, pool, config) -> AsyncIOScheduler:
         minutes=15,
         args=[pool],
         id="sync_recent_scores",
+        replace_existing=True,
+        max_instances=1,
+    )
+
+    scheduler.add_job(
+        sync_played_scores,
+        "interval",
+        minutes=30,
+        args=[pool],
+        id="sync_played_scores",
         replace_existing=True,
         max_instances=1,
     )

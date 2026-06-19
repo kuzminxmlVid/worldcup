@@ -565,3 +565,21 @@ async def get_matches_for_score_update(pool: asyncpg.Pool, start_utc, end_utc):
             start_utc,
             end_utc,
         )
+
+
+
+async def get_matches_for_score_backfill(pool: asyncpg.Pool):
+    async with pool.acquire() as conn:
+        return await conn.fetch(
+            """
+            SELECT *
+            FROM matches
+            WHERE kickoff_utc <= NOW()
+              AND (
+                    home_goals IS NULL
+                 OR away_goals IS NULL
+                 OR COALESCE(status_short, '') NOT IN ('FT', 'AET', 'PEN')
+              )
+            ORDER BY kickoff_utc ASC
+            """
+        )
