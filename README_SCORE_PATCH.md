@@ -1,4 +1,4 @@
-Patch: API-Football score button
+Patch: ESPN score button
 
 Replace/add these files:
 - main.py
@@ -8,29 +8,25 @@ Replace/add these files:
 - api_football.py
 
 What changed:
-- added button: Узнать счёт
-- when pressed, the bot requests score from API-Football
-- the bot stores API fixture id in PostgreSQL when it finds the match
-- home_goals, away_goals, status_short and status_long are saved to the existing matches table
+- removed dependency on API-Football paid season access
+- api_football.py now uses ESPN public scoreboard JSON endpoint
+- no API key is required for score lookup
+- button remains the same: Узнать счёт
+- the bot stores ESPN event id in the existing api_fixture_id field
+- home_goals, away_goals, status_short and status_long are saved to PostgreSQL
 - the match card image is updated with the score
-- if the old card image message can be edited, it is edited
+- if the old card can be edited, it is edited
 - if Telegram refuses to edit it, the bot sends a new updated card
-- a table match_card_messages stores the last card message id per chat/user/match
 
-Railway variables:
-- API_FOOTBALL_KEY=your_key
-
-Optional variables:
-- API_FOOTBALL_LEAGUE_ID=1
-- API_FOOTBALL_SEASON=2026
+Railway:
+- API_FOOTBALL_KEY is no longer needed for this feature
+- you can leave it in Railway, it will be ignored
 
 Test:
-1. Add API_FOOTBALL_KEY to Railway
-2. Redeploy
-3. /start
-4. Open any match card
-5. Press Узнать счёт
+1. Redeploy
+2. Open any match card
+3. Press Узнать счёт
 
 Notes:
-- Free API-Football plan is limited, so do not spam the score button.
-- If API-Football has not published World Cup 2026 fixtures yet, the bot will say it could not find the match.
+- ESPN endpoint is public but unofficial/undocumented.
+- If ESPN changes the endpoint or team names, the bot may fail to find a match.

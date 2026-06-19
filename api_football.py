@@ -1,47 +1,52 @@
 import asyncio
-import os
 import re
 import urllib.parse
 import urllib.request
 import urllib.error
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta, timezone
 from difflib import SequenceMatcher
 
 
-API_BASE_URL = "https://v3.football.api-sports.io"
-DEFAULT_LEAGUE_ID = int(os.getenv("API_FOOTBALL_LEAGUE_ID", "1"))
-DEFAULT_SEASON = int(os.getenv("API_FOOTBALL_SEASON", "2026"))
+ESPN_BASE_URL = "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard"
 
 
 class ApiFootballError(Exception):
     pass
 
 
-API_TEAM_ALIASES = {
-    "usa": "usa",
-    "united states": "usa",
+TEAM_ALIASES = {
+    "usa": "united states",
+    "united states": "united states",
+    "united states of america": "united states",
     "south korea": "korea republic",
     "korea republic": "korea republic",
+    "republic of korea": "korea republic",
     "dr congo": "congo dr",
     "d r congo": "congo dr",
     "congo dr": "congo dr",
+    "democratic republic of congo": "congo dr",
     "czech republic": "czech republic",
+    "czechia": "czech republic",
     "ivory coast": "cote divoire",
+    "cote divoire": "cote divoire",
     "cote d ivoire": "cote divoire",
     "côte d’ivoire": "cote divoire",
     "côte d'ivoire": "cote divoire",
-    "bosnia and herzegovina": "bosnia herzegovina",
     "bosnia & herzegovina": "bosnia herzegovina",
+    "bosnia and herzegovina": "bosnia herzegovina",
 }
 
 
-def _api_key() -> str:
-    key = os.getenv("API_FOOTBALL_KEY") or os.getenv("APISPORTS_KEY")
-    if not key:
-        raise ApiFootballError(
-            "API_FOOTBALL_KEY is not set. Add it in Railway variables."
-        )
-    return key
+def _row_get(row, key: str, default=None):
+    try:
+        value = row.get(key, default)
+        return default if value is None else value
+    except AttributeError:
+        try:
+            value = row[key]
+            return default if value is None else value
+        except Exception:
+            return default
 
 
 def _normalize_team(name: str) -> str:
@@ -49,7 +54,7 @@ def _normalize_team(name: str) -> str:
     text = text.replace("ё", "е")
     text = re.sub(r"[^a-zа-я0-9]+", " ", text)
     text = " ".join(text.split())
-    return API_TEAM_ALIASES.get(text, text)
+    return TEAM_ALIASES.get(text, text)
 
 
 def _similar(a: str, b: str) -> float:
@@ -64,118 +69,184 @@ def _similar(a: str, b: str) -> float:
     return SequenceMatcher(None, a_norm, b_norm).ratio()
 
 
-def _parse_api_date(value: str):
-    if not value:
-        return None
-
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-
-
-def _request_fixtures(params: dict) -> list[dict]:
+def _request_scoreboard(params: dict) -> list[dict]:
     query = urllib.parse.urlencode(params)
-    url = f"{API_BASE_URL}/fixtures?{query}"
+    url = ESPN_BASE_URL if not query else f"{ESPN_BASE_URL}?{query}"
 
     request = urllib.request.Request(
         url,
-        headers={
-            "x-apisports-key": _api_key(),
-            "User-Agent": "worldcup-telegram-bot/1.0",
-        },
+        headers={"User-Agent": "worldcup-telegram-bot/1.0"},
         method="GET",
     )
 
     try:
         with urllib.request.urlopen(request, timeout=12) as response:
             import json
-
             payload = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
-        raise ApiFootballError(f"API-Football HTTP error: {e.code}") from e
+        raise ApiFootballError(f"ESPN HTTP error: {e.code}") from e
     except urllib.error.URLError as e:
-        raise ApiFootballError(f"API-Football network error: {e}") from e
+        raise ApiFootballError(f"ESPN network error: {e}") from e
     except TimeoutError as e:
-        raise ApiFootballError("API-Football timeout") from e
+        raise ApiFootballError("ESPN timeout") from e
 
-    errors = payload.get("errors")
-    if errors:
-        raise ApiFootballError(f"API-Football error: {errors}")
-
-    return payload.get("response", []) or []
+    return payload.get("events", []) or []
 
 
-def _fixture_result_from_item(local_row, item: dict) -> dict:
-    fixture = item.get("fixture") or {}
-    teams = item.get("teams") or {}
-    goals = item.get("goals") or {}
-    status = fixture.get("status") or {}
+def _parse_score(value):
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
-    api_home = (teams.get("home") or {}).get("name") or ""
-    api_away = (teams.get("away") or {}).get("name") or ""
 
-    local_home = local_row["home_team"]
-    local_away = local_row["away_team"]
+def _parse_espn_datetime(value: str):
+    if not value:
+        return None
+
+    try:
+        return __import__("datetime").datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _teams_from_event(event: dict):
+    competitions = event.get("competitions") or []
+    if not competitions:
+        return None
+
+    comp = competitions[0]
+    competitors = comp.get("competitors") or []
+
+    home = None
+    away = None
+
+    for item in competitors:
+        home_away = item.get("homeAway")
+        team = item.get("team") or {}
+        name = team.get("displayName") or team.get("shortDisplayName") or team.get("name") or ""
+        score = _parse_score(item.get("score"))
+
+        if home_away == "home":
+            home = {"name": name, "score": score}
+        elif home_away == "away":
+            away = {"name": name, "score": score}
+
+    if not home or not away:
+        return None
+
+    return home, away, comp
+
+
+def _status_from_comp(comp: dict):
+    status = comp.get("status") or {}
+    status_type = status.get("type") or {}
+
+    state = status_type.get("state")
+    completed = bool(status_type.get("completed"))
+    name = status_type.get("name") or ""
+    description = status_type.get("description") or ""
+    detail = status_type.get("detail") or ""
+    short_detail = status_type.get("shortDetail") or ""
+
+    if completed:
+        return "FT", description or "Full Time"
+
+    if state == "in":
+        return "LIVE", detail or short_detail or description or name or "Live"
+
+    if state == "pre":
+        return "NS", description or "Scheduled"
+
+    return name or "UNK", description or detail or short_detail or "Unknown"
+
+
+def _result_from_event(local_row, event: dict) -> dict | None:
+    teams = _teams_from_event(event)
+    if not teams:
+        return None
+
+    api_home, api_away, comp = teams
+
+    local_home = _row_get(local_row, "home_team", "")
+    local_away = _row_get(local_row, "away_team", "")
 
     same_order = (
-        _similar(local_home, api_home) >= 0.72
-        and _similar(local_away, api_away) >= 0.72
+        _similar(local_home, api_home["name"]) >= 0.70
+        and _similar(local_away, api_away["name"]) >= 0.70
     )
     reversed_order = (
-        _similar(local_home, api_away) >= 0.72
-        and _similar(local_away, api_home) >= 0.72
+        _similar(local_home, api_away["name"]) >= 0.70
+        and _similar(local_away, api_home["name"]) >= 0.70
     )
 
-    home_goals = goals.get("home")
-    away_goals = goals.get("away")
+    if not same_order and not reversed_order:
+        return None
+
+    home_goals = api_home["score"]
+    away_goals = api_away["score"]
 
     if reversed_order:
         home_goals, away_goals = away_goals, home_goals
 
+    status_short, status_long = _status_from_comp(comp)
+
     return {
-        "api_fixture_id": fixture.get("id"),
-        "status_short": status.get("short"),
-        "status_long": status.get("long"),
-        "elapsed": status.get("elapsed"),
+        "api_fixture_id": _parse_score(event.get("id")),
+        "status_short": status_short,
+        "status_long": status_long,
         "home_goals": home_goals,
         "away_goals": away_goals,
-        "api_home_team": api_home,
-        "api_away_team": api_away,
-        "api_date": fixture.get("date"),
+        "api_home_team": api_home["name"],
+        "api_away_team": api_away["name"],
+        "api_date": event.get("date"),
     }
 
 
-def _best_fixture_match(local_row, items: list[dict]) -> dict | None:
-    local_home = local_row["home_team"]
-    local_away = local_row["away_team"]
-    local_kickoff = local_row["kickoff_utc"]
-    if local_kickoff.tzinfo is None:
+def _best_event_match(local_row, events: list[dict]) -> dict | None:
+    local_home = _row_get(local_row, "home_team", "")
+    local_away = _row_get(local_row, "away_team", "")
+
+    local_kickoff = _row_get(local_row, "kickoff_utc")
+    if local_kickoff and local_kickoff.tzinfo is None:
         local_kickoff = local_kickoff.replace(tzinfo=timezone.utc)
 
-    best_item = None
+    best_event = None
     best_score = -1.0
 
-    for item in items:
-        fixture = item.get("fixture") or {}
-        teams = item.get("teams") or {}
-        api_home = (teams.get("home") or {}).get("name") or ""
-        api_away = (teams.get("away") or {}).get("name") or ""
+    for event in events:
+        teams = _teams_from_event(event)
+        if not teams:
+            continue
+
+        api_home, api_away, _ = teams
 
         same_order = (
-            _similar(local_home, api_home) + _similar(local_away, api_away)
+            _similar(local_home, api_home["name"])
+            + _similar(local_away, api_away["name"])
         ) / 2
+
         reversed_order = (
-            _similar(local_home, api_away) + _similar(local_away, api_home)
+            _similar(local_home, api_away["name"])
+            + _similar(local_away, api_home["name"])
         ) / 2
+
         team_score = max(same_order, reversed_order)
 
-        api_dt = _parse_api_date(fixture.get("date"))
         time_score = 0.0
-        if api_dt:
-            diff_hours = abs((api_dt.astimezone(timezone.utc) - local_kickoff.astimezone(timezone.utc)).total_seconds()) / 3600
-            if diff_hours <= 2:
-                time_score = 0.30
+        api_dt = _parse_espn_datetime(event.get("date"))
+        if local_kickoff and api_dt:
+            diff_hours = abs(
+                (
+                    api_dt.astimezone(timezone.utc)
+                    - local_kickoff.astimezone(timezone.utc)
+                ).total_seconds()
+            ) / 3600
+
+            if diff_hours <= 3:
+                time_score = 0.35
             elif diff_hours <= 24:
                 time_score = 0.12
 
@@ -183,54 +254,56 @@ def _best_fixture_match(local_row, items: list[dict]) -> dict | None:
 
         if score > best_score:
             best_score = score
-            best_item = item
+            best_event = event
 
-    if not best_item or best_score < 0.92:
+    if not best_event or best_score < 0.90:
         return None
 
-    return _fixture_result_from_item(local_row, best_item)
+    return _result_from_event(local_row, best_event)
 
 
 def _fetch_score_sync(local_row) -> dict:
-    cached_api_id = local_row.get("api_fixture_id") if hasattr(local_row, "get") else local_row["api_fixture_id"]
+    cached_espn_event_id = _row_get(local_row, "api_fixture_id")
+    if cached_espn_event_id:
+        events = _request_scoreboard({"event": cached_espn_event_id})
+        found = _best_event_match(local_row, events)
+        if found:
+            return found
 
-    if cached_api_id:
-        items = _request_fixtures({"id": cached_api_id})
-        if items:
-            return _fixture_result_from_item(local_row, items[0])
+    kickoff = _row_get(local_row, "kickoff_utc")
+    if kickoff is None:
+        events = _request_scoreboard({})
+        found = _best_event_match(local_row, events)
+        if found:
+            return found
 
-    kickoff = local_row["kickoff_utc"]
+        raise ApiFootballError("ESPN не нашёл этот матч.")
+
     if kickoff.tzinfo is None:
         kickoff = kickoff.replace(tzinfo=timezone.utc)
 
     base_date = kickoff.astimezone(timezone.utc).date()
     dates = [
-        base_date.isoformat(),
-        (base_date - timedelta(days=1)).isoformat(),
-        (base_date + timedelta(days=1)).isoformat(),
+        base_date,
+        base_date - timedelta(days=1),
+        base_date + timedelta(days=1),
     ]
 
-    checked_items = []
-    for date in dates:
-        items = _request_fixtures(
-            {
-                "league": DEFAULT_LEAGUE_ID,
-                "season": DEFAULT_SEASON,
-                "date": date,
-            }
-        )
-        checked_items.extend(items)
+    checked_events = []
+    for day in dates:
+        events = _request_scoreboard({"dates": day.strftime("%Y%m%d")})
+        checked_events.extend(events)
 
-        found = _best_fixture_match(local_row, items)
+        found = _best_event_match(local_row, events)
         if found:
             return found
 
-    found = _best_fixture_match(local_row, checked_items)
+    found = _best_event_match(local_row, checked_events)
     if found:
         return found
 
     raise ApiFootballError(
-        "Не нашёл матч в API-Football. Возможно, в API другие названия команд или турнир ещё не опубликован."
+        "ESPN не нашёл этот матч. Возможно, у ESPN другие названия команд или матч ещё не опубликован."
     )
 
 
