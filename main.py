@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
-from aiogram.types import Message, CallbackQuery, FSInputFile, ForceReply
+from aiogram.types import Message, CallbackQuery, FSInputFile, ForceReply, InlineKeyboardButton, InlineKeyboardMarkup
 
 import db
 from config import load_config
@@ -28,12 +28,12 @@ from formatting import (
     split_telegram_text,
     help_text,
 )
-from keyboards import main_keyboard, nav_inline_keyboard, match_inline_keyboard, match_list_keyboard, team_select_keyboard
+from keyboards import main_keyboard, nav_inline_keyboard, match_inline_keyboard, match_list_keyboard
 from local_schedule import load_matches, SCHEDULE_PATH
 from match_card import build_match_card
 from scheduler import setup_scheduler, sync_fixtures, sync_played_scores
 
-VERSION = "local-schedule-2026-06-19-v24-match-links-standings"
+VERSION = "local-schedule-2026-06-19-v25-team-picker-selfcontained"
 
 logging.basicConfig(level=logging.INFO)
 config = load_config()
@@ -119,6 +119,35 @@ def team_slug(name: str) -> str:
     text = text.lower().replace("&", " and ")
     text = re.sub(r"[^a-z0-9]+", "_", text)
     return text.strip("_")
+
+
+def local_team_select_keyboard(team_names: list[str], team_flags: dict | None = None) -> InlineKeyboardMarkup:
+    team_flags = team_flags or {}
+    inline_keyboard = []
+    row = []
+
+    for name in team_names:
+        label = f"{team_flags.get(name, '')} {name}".strip()
+        row.append(
+            InlineKeyboardButton(
+                text=label,
+                callback_data=f"team_select:{team_slug(name)}",
+            )
+        )
+
+        if len(row) == 2:
+            inline_keyboard.append(row)
+            row = []
+
+    if row:
+        inline_keyboard.append(row)
+
+    inline_keyboard.append([
+        InlineKeyboardButton(text="Сегодня", callback_data="nav:today"),
+        InlineKeyboardButton(text="Следующий", callback_data="nav:next"),
+    ])
+
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 
 
 
@@ -321,7 +350,7 @@ async def send_team_picker(message: Message):
 
     await message.answer(
         "Выбери сборную. Я покажу все её матчи: сыгранные и будущие.",
-        reply_markup=team_select_keyboard(names, TEAM_FLAGS),
+        reply_markup=local_team_select_keyboard(names, TEAM_FLAGS),
     )
 
 

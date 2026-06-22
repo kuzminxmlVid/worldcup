@@ -1,10 +1,20 @@
 from aiogram.types import KeyboardButton, ReplyKeyboardMarkup, InlineKeyboardButton, InlineKeyboardMarkup
+import re
+import unicodedata
+
+
+def _team_slug(name: str) -> str:
+    text = unicodedata.normalize("NFKD", str(name))
+    text = text.encode("ascii", "ignore").decode("ascii")
+    text = text.lower().replace("&", " and ")
+    text = re.sub(r"[^a-z0-9]+", "_", text)
+    return text.strip("_")
 
 
 def main_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="Следующий матч")],
+            [KeyboardButton(text="Следующий матч"), KeyboardButton(text="Команды")],
             [KeyboardButton(text="Сегодня"), KeyboardButton(text="Завтра")],
             [KeyboardButton(text="7 дней")],
         ],
@@ -23,6 +33,9 @@ def nav_inline_keyboard(reminders_enabled: bool | None = None) -> InlineKeyboard
             [
                 InlineKeyboardButton(text="Следующий", callback_data="nav:next"),
                 InlineKeyboardButton(text="7 дней", callback_data="nav:week"),
+            ],
+            [
+                InlineKeyboardButton(text="Команды", callback_data="nav:teams"),
             ],
         ]
     )
@@ -86,7 +99,37 @@ def match_list_keyboard(rows, tz, reminders_enabled: bool | None = None) -> Inli
     inline_keyboard.extend([
         [
             InlineKeyboardButton(text="Следующий", callback_data="nav:next"),
+            InlineKeyboardButton(text="Команды", callback_data="nav:teams"),
         ],
+    ])
+
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+
+
+def team_select_keyboard(team_names: list[str], team_flags: dict | None = None) -> InlineKeyboardMarkup:
+    team_flags = team_flags or {}
+    inline_keyboard = []
+
+    row = []
+    for name in team_names:
+        label = f"{team_flags.get(name, '')} {name}".strip()
+        row.append(
+            InlineKeyboardButton(
+                text=label,
+                callback_data=f"team_select:{_team_slug(name)}",
+            )
+        )
+
+        if len(row) == 2:
+            inline_keyboard.append(row)
+            row = []
+
+    if row:
+        inline_keyboard.append(row)
+
+    inline_keyboard.append([
+        InlineKeyboardButton(text="Сегодня", callback_data="nav:today"),
+        InlineKeyboardButton(text="Следующий", callback_data="nav:next"),
     ])
 
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
