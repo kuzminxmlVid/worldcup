@@ -119,6 +119,7 @@ def match_line(row, tz: ZoneInfo) -> str:
         f"Время {kickoff.strftime('%H:%M')}",
         f"{team_with_flag(row['home_team'])} — {team_with_flag(row['away_team'])}",
         stage_with_icon(group_or_round),
+        f"Карточка: /match_{row['fixture_id']}",
     ]
 
     if row["venue"]:
@@ -147,7 +148,25 @@ def format_single_match(row, tz: ZoneInfo, title: str = "Следующий ма
     return "\n".join(lines)
 
 
-def format_user_match_data(row, user_data, tz: ZoneInfo) -> str:
+def _standing_line(team: str, standings: dict | None) -> str | None:
+    if not standings:
+        return None
+
+    stats = standings.get(team)
+    if not stats:
+        return None
+
+    points = int(stats.get("points", 0))
+    played = int(stats.get("played", 0))
+    rank = int(stats.get("rank", 0))
+
+    return (
+        f"{team_with_flag_html(team)}: "
+        f"{rank} место, {points} очк., {played} игр"
+    )
+
+
+def format_user_match_data(row, user_data, tz: ZoneInfo, standings: dict | None = None) -> str:
     kickoff = row["kickoff_utc"].astimezone(tz)
 
     prediction = None
@@ -170,6 +189,16 @@ def format_user_match_data(row, user_data, tz: ZoneInfo) -> str:
         f"{team_with_flag_html(row['home_team'])} — {team_with_flag_html(row['away_team'])}",
     ]
 
+    home_standing = _standing_line(row["home_team"], standings)
+    away_standing = _standing_line(row["away_team"], standings)
+
+    if home_standing or away_standing:
+        lines.extend(["", "Положение в группе:"])
+        if home_standing:
+            lines.append(home_standing)
+        if away_standing:
+            lines.append(away_standing)
+
     hidden_score = _score_spoiler(row)
     if hidden_score:
         lines.extend(["", "Счёт:", hidden_score])
@@ -187,7 +216,6 @@ def format_user_match_data(row, user_data, tz: ZoneInfo) -> str:
     ])
 
     return "\n".join(lines)
-
 
 def format_matches(title: str, rows, tz: ZoneInfo) -> str:
     if not rows:

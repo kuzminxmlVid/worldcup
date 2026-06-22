@@ -583,3 +583,72 @@ async def get_matches_for_score_backfill(pool: asyncpg.Pool):
             ORDER BY kickoff_utc ASC
             """
         )
+
+
+
+async def get_group_standings(pool: asyncpg.Pool, group_name: str):
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT home_team, away_team, home_goals, away_goals
+            FROM matches
+            WHERE group_name = $1
+            ORDER BY kickoff_utc ASC
+            """,
+            group_name,
+        )
+
+    table: dict[str, dict] = {}
+
+    def ensure_team(team: str) -> dict:
+        if team not in table:
+            table[team] = {
+                "team": team,
+                "played": 0,
+                "points": 0,
+                "gf": 0,
+                "ga": 0,
+                "gd": 0,
+                "rank": 0,
+            }
+        return table[team]
+
+    for row in rows:
+        home = row["home_team"]
+        away = row["away_team"]
+        home_stats = ensure_team(home)
+        away_stats = ensure_team(away)
+
+        home_goals = row["home_goals"]
+        away_goals = row["away_goals"]
+
+        if home_goals is None or away_goals is None:
+            continue
+
+        home_stats["played"] += 1
+        away_stats["played"] += 1
+        home_stats["gf"] += int(home_goals)
+        home_stats["ga"] += int(away_goals)
+        away_stats["gf"] += int(away_goals)
+        away_stats["ga"] += int(home_goals)
+
+        if home_goals > away_goals:
+            home_stats["points"] += 3
+        elif home_goals < away_goals:
+            away_stats["points"] += 3
+        else:
+            home_stats["points"] += 1
+            away_stats["points"] += 1
+
+    for stats in table.values():
+        stats["gd"] = stats["gf"] - stats["ga"]
+
+    ordered = sorted(
+        table.values(),
+        key=lambda x: (-x["points"], -x["gd"], -x["gf"], x["team"]),
+    )
+
+    for idx, stats in enumerate(ordered, start=1):
+        stats["rank"] = idx
+
+    return ordered

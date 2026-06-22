@@ -2,6 +2,7 @@ import asyncio
 import logging
 import re
 from difflib import get_close_matches
+import unicodedata
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
@@ -12,6 +13,7 @@ from aiogram.types import Message, CallbackQuery, FSInputFile, ForceReply
 import db
 from config import load_config
 from formatting import (
+    TEAM_FLAGS,
     NOTE_MAX_LEN,
     POST_THOUGHTS_MAX_LEN,
     PREDICTION_MAX_LEN,
@@ -26,12 +28,12 @@ from formatting import (
     split_telegram_text,
     help_text,
 )
-from keyboards import main_keyboard, nav_inline_keyboard, match_inline_keyboard, match_list_keyboard
+from keyboards import main_keyboard, nav_inline_keyboard, match_inline_keyboard, match_list_keyboard, team_select_keyboard
 from local_schedule import load_matches, SCHEDULE_PATH
 from match_card import build_match_card
 from scheduler import setup_scheduler, sync_fixtures, sync_played_scores
 
-VERSION = "local-schedule-2026-06-19-v22-open-score-backfill"
+VERSION = "local-schedule-2026-06-19-v24-match-links-standings"
 
 logging.basicConfig(level=logging.INFO)
 config = load_config()
@@ -111,6 +113,14 @@ def normalize_team_query(query: str) -> str:
     return TEAM_ALIASES.get(cleaned, query.strip())
 
 
+def team_slug(name: str) -> str:
+    text = unicodedata.normalize("NFKD", str(name))
+    text = text.encode("ascii", "ignore").decode("ascii")
+    text = text.lower().replace("&", " and ")
+    text = re.sub(r"[^a-z0-9]+", "_", text)
+    return text.strip("_")
+
+
 
 def user_id_from_message(message: Message) -> int:
     return message.from_user.id if message.from_user else message.chat.id
@@ -144,6 +154,15 @@ def parse_reply_marker(message: Message):
 async def reminders_enabled_for(chat_id: int) -> bool:
     settings = await db.get_chat_settings(pool, chat_id)
     return bool(settings["reminders_enabled"]) if settings else False
+
+
+async def standings_context_for_match(row) -> dict:
+    group_name = row["group_name"]
+    if not group_name:
+        return {}
+
+    table = await db.get_group_standings(pool, group_name)
+    return {item["team"]: item for item in table}
 
 
 async def send_text(message: Message, text: str):
@@ -203,7 +222,8 @@ async def send_match_personal_post(
     user_id = user_id or user_id_from_message(message)
     enabled = await reminders_enabled_for(message.chat.id)
     user_data = await db.get_user_match_data(pool, message.chat.id, user_id, row["fixture_id"])
-    text = format_user_match_data(row, user_data, config.app_tz)
+    standings = await standings_context_for_match(row)
+    text = format_user_match_data(row, user_data, config.app_tz, standings=standings)
     markup = match_inline_keyboard(
         fixture_id=row["fixture_id"],
         reminders_enabled=enabled,
@@ -236,7 +256,8 @@ async def send_match_by_id(message: Message, fixture_id: int, user_id: int | Non
 
     actual_user_id = user_id or user_id_from_message(message)
 
-    card_path = build_match_card(row, config.app_tz)
+    standings = await standings_context_for_match(row)
+    card_path = build_match_card(row, config.app_tz, standings=standings)
     try:
         sent_card = await message.answer_photo(FSInputFile(card_path), caption="Карточка матча")
         await db.save_match_card_message(
@@ -288,6 +309,22 @@ async def toggle_alerts(message: Message):
 
 
 
+async def send_team_picker(message: Message):
+    names = await db.get_all_team_names(pool)
+
+    if not names:
+        await message.answer(
+            "Команд пока нет в базе. Нажми /sync, а потом попробуй снова.",
+            reply_markup=main_keyboard(),
+        )
+        return
+
+    await message.answer(
+        "Выбери сборную. Я покажу все её матчи: сыгранные и будущие.",
+        reply_markup=team_select_keyboard(names, TEAM_FLAGS),
+    )
+
+
 async def prompt_team_search(message: Message, user_id: int):
     await db.set_pending_input(pool, message.chat.id, user_id, 0, "team_search", None)
     logging.info(
@@ -328,7 +365,7 @@ async def send_team_search_results(message: Message, query: str):
             "Матчи не нашёл.\n\n"
             "Возможно, ты имел в виду:\n"
             + "\n".join(f"• {name}" for name in suggestions)
-            + "\n\nНажми «Поиск команды» и попробуй ещё раз.",
+            + "\n\nНажми «Команды» или /team и попробуй ещё раз.",
             reply_markup=main_keyboard(),
         )
     else:
@@ -530,11 +567,29 @@ async def menu(message: Message):
 
 
 
+@dp.message(Command("match"))
+async def match_by_command(message: Message):
+    parts = (message.text or "").split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip().isdigit():
+        await message.answer("Напиши так: /match 123")
+        return
+
+    await send_match_by_id(message, int(parts[1].strip()), user_id=user_id_from_message(message))
+
+
+@dp.message(F.text.regexp(r"^/match_\d+(?:@\w+)?$"))
+async def match_by_short_link(message: Message):
+    text = (message.text or "").split("@", 1)[0]
+    fixture_id = int(text.replace("/match_", ""))
+    await send_match_by_id(message, fixture_id, user_id=user_id_from_message(message))
+
+
 @dp.message(Command("team"))
+@dp.message(Command("teams"))
 @dp.message(Command("search"))
-@dp.message(F.text == "Поиск команды")
+@dp.message(F.text == "Команды")
 async def team_search(message: Message):
-    await prompt_team_search(message, user_id_from_message(message))
+    await send_team_picker(message)
 
 
 
@@ -666,6 +721,8 @@ async def nav_callback(callback: CallbackQuery):
         await send_next_match_text(callback.message, user_id=callback.from_user.id)
     elif action == "week":
         await send_week_text(callback.message)
+    elif action == "teams":
+        await send_team_picker(callback.message)
     elif action == "team_search":
         await prompt_team_search(callback.message, callback.from_user.id)
     elif action == "sync":
@@ -675,6 +732,26 @@ async def nav_callback(callback: CallbackQuery):
     elif action == "alerts_toggle":
         await toggle_alerts(callback.message)
 
+
+
+
+@dp.callback_query(F.data.startswith("team_select:"))
+async def team_select_callback(callback: CallbackQuery):
+    selected_slug = callback.data.split(":", 1)[1]
+    names = await db.get_all_team_names(pool)
+
+    team_name = None
+    for name in names:
+        if team_slug(name) == selected_slug:
+            team_name = name
+            break
+
+    if not team_name:
+        await callback.answer("Не нашёл команду.")
+        return
+
+    await callback.answer(team_name)
+    await send_team_search_results(callback.message, team_name)
 
 
 @dp.callback_query(F.data.startswith("open_match:"))
@@ -733,6 +810,11 @@ async def pending_or_unknown_text(message: Message):
         return
 
     text = (message.text or "").strip()
+
+    match_link = re.match(r"^/match_(\d+)(?:@\w+)?$", text)
+    if match_link:
+        await send_match_by_id(message, int(match_link.group(1)), user_id=user_id_from_message(message))
+        return
 
     if text.startswith("/"):
         await message.answer("Не понял команду. Выбери действие кнопками снизу или нажми /menu.", reply_markup=main_keyboard())

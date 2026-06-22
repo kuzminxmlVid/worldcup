@@ -261,7 +261,22 @@ def _draw_clock_icon(draw, x, y, size, accent):
     draw.line((cx, cy, x + size * 0.72, y + size * 0.64), fill=(235, 240, 248, 255), width=3)
 
 
-def build_match_card(row, tz: ZoneInfo) -> str:
+
+def _team_standing_label(standings: dict | None, team_name: str) -> str | None:
+    if not standings:
+        return None
+
+    stats = standings.get(team_name)
+    if not stats:
+        return None
+
+    rank = int(stats.get("rank", 0))
+    points = int(stats.get("points", 0))
+    played = int(stats.get("played", 0))
+
+    return f"#{rank} · {points} pts · {played} played"
+
+def build_match_card(row, tz: ZoneInfo, standings: dict | None = None) -> str:
     width, height = 1600, 1200
     img = _vertical_gradient((width, height), (6, 17, 38), (3, 8, 22))
     draw = ImageDraw.Draw(img)
@@ -333,6 +348,20 @@ def build_match_card(row, tz: ZoneInfo) -> str:
     rw = draw.textlength(right_name, font=name_font_right)
     draw.text((377 - lw / 2, 810), left_name, font=name_font_left, fill=white)
     draw.text((1222 - rw / 2, 810), right_name, font=name_font_right, fill=white)
+
+    standing_font = _font(FONT_BOLD, 25)
+    left_standing = _team_standing_label(standings, str(row["home_team"]))
+    right_standing = _team_standing_label(standings, str(row["away_team"]))
+
+    if left_standing:
+        sw = draw.textlength(left_standing, font=standing_font)
+        _panel(draw, (377 - sw / 2 - 20, 862, 377 + sw / 2 + 20, 902), (8, 25, 54, 230), blue_line, radius=14, width=2)
+        draw.text((377 - sw / 2, 869), left_standing, font=standing_font, fill=gold)
+
+    if right_standing:
+        sw = draw.textlength(right_standing, font=standing_font)
+        _panel(draw, (1222 - sw / 2 - 20, 862, 1222 + sw / 2 + 20, 902), (8, 25, 54, 230), red_line, radius=14, width=2)
+        draw.text((1222 - sw / 2, 869), right_standing, font=standing_font, fill=gold)
 
     medal_size = 184
     medal = Image.new("RGBA", (medal_size, medal_size), (0, 0, 0, 0))
