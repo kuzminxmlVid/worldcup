@@ -19,7 +19,6 @@ from formatting import (
     PREDICTION_MAX_LEN,
     day_bounds_utc,
     format_matches,
-    format_playoff_matches,
     format_debug,
     format_alerts_status,
     format_user_match_data,
@@ -31,9 +30,10 @@ from formatting import (
 )
 from keyboards import main_keyboard, nav_inline_keyboard, match_inline_keyboard, match_list_keyboard
 from match_card import build_match_card
+from playoff_bracket import build_playoff_bracket
 from scheduler import setup_scheduler, sync_fixtures, sync_played_scores
 
-VERSION = "external-espn-schedule-v28-playoffs-button"
+VERSION = "external-espn-schedule-v29-playoff-bracket-image"
 
 logging.basicConfig(level=logging.INFO)
 config = load_config()
@@ -241,16 +241,26 @@ async def send_week_text(message: Message):
 async def send_playoffs_text(message: Message):
     enabled = await reminders_enabled_for(message.chat.id)
     rows = await db.get_playoff_matches(pool)
-    text = format_playoff_matches(rows, config.app_tz)
+    image_path = build_playoff_bracket(rows, config.app_tz)
 
-    if not rows:
-        await message.answer(text, reply_markup=nav_inline_keyboard(enabled))
-        return
+    try:
+        caption = (
+            "Плей-офф ЧМ 2026\n"
+            "Актуальная сетка на момент запроса.\n\n"
+            "Открой нужный матч через ссылку /match_123 на картинке или кнопками ниже."
+        )
 
-    parts = split_telegram_text(text)
-    for i, part in enumerate(parts):
-        markup = match_list_keyboard(rows, config.app_tz, enabled) if i == len(parts) - 1 else None
-        await message.answer(part, reply_markup=markup)
+        markup = match_list_keyboard(rows, config.app_tz, enabled) if rows else nav_inline_keyboard(enabled)
+        await message.answer_photo(
+            FSInputFile(image_path),
+            caption=caption,
+            reply_markup=markup,
+        )
+    finally:
+        try:
+            Path(image_path).unlink(missing_ok=True)
+        except Exception:
+            pass
 
 
 async def send_match_personal_post(

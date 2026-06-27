@@ -662,7 +662,6 @@ async def get_playoff_matches(pool: asyncpg.Pool):
             SELECT *
             FROM matches
             WHERE
-                -- Playoff stage by readable round name.
                 (
                     round_name IS NOT NULL
                     AND (
@@ -674,13 +673,7 @@ async def get_playoff_matches(pool: asyncpg.Pool):
                         OR round_name ILIKE '%third%'
                     )
                 )
-                OR
-                -- Fallback for external feeds that do not expose round names well.
-                -- World Cup 2026 knockout stage starts on 2026-06-28.
-                kickoff_utc >= COALESCE(
-                    NULLIF(current_setting('app.playoff_start_utc', true), '')::timestamptz,
-                    TIMESTAMPTZ '2026-06-28 00:00:00+00'
-                )
+                OR kickoff_utc >= TIMESTAMPTZ '2026-06-28 00:00:00+00'
             ORDER BY kickoff_utc ASC
             """
         )
