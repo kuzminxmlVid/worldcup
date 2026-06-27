@@ -190,6 +190,18 @@ async def replace_matches(pool: asyncpg.Pool, matches: list[dict]) -> int:
     return len(matches)
 
 
+
+async def get_all_matches(pool: asyncpg.Pool):
+    async with pool.acquire() as conn:
+        return await conn.fetch(
+            """
+            SELECT *
+            FROM matches
+            ORDER BY kickoff_utc ASC
+            """
+        )
+
+
 async def get_matches_between(pool: asyncpg.Pool, start_utc, end_utc):
     async with pool.acquire() as conn:
         return await conn.fetch(

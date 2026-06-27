@@ -33,7 +33,7 @@ from keyboards import main_keyboard, nav_inline_keyboard, match_inline_keyboard,
 from match_card import build_match_card
 from scheduler import setup_scheduler, sync_fixtures, sync_played_scores
 
-VERSION = "external-espn-schedule-v30-next-round-list"
+VERSION = "external-espn-schedule-v31-next-round-buttons-only-syncfix"
 
 logging.basicConfig(level=logging.INFO)
 config = load_config()
@@ -240,16 +240,15 @@ async def send_week_text(message: Message):
 
 async def send_next_round_text(message: Message):
     round_label, rows = await db.get_next_playoff_round_matches(pool)
-    text = format_next_round_matches(round_label, rows, config.app_tz)
 
     if not rows:
+        text = format_next_round_matches(round_label, rows, config.app_tz)
         await message.answer(text, reply_markup=nav_inline_keyboard(await reminders_enabled_for(message.chat.id)))
         return
 
-    parts = split_telegram_text(text)
-    for i, part in enumerate(parts):
-        markup = next_round_keyboard(rows, config.app_tz) if i == len(parts) - 1 else None
-        await message.answer(part, reply_markup=markup)
+    # Telegram API не умеет отправлять inline-кнопки совсем без сообщения.
+    # Поэтому отправляем невидимый символ: в чате остаются только кнопки матчей.
+    await message.answer("\u2063", reply_markup=next_round_keyboard(rows, config.app_tz))
 
 
 
