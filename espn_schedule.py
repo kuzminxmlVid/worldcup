@@ -17,6 +17,14 @@ class EspnScheduleError(Exception):
     pass
 
 
+def _as_dict(value) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
+def _as_list(value) -> list:
+    return value if isinstance(value, list) else []
+
+
 TEAM_NAME_MAP = {
     "United States": "USA",
     "United States of America": "USA",
@@ -106,8 +114,9 @@ def _parse_kickoff(value: str) -> datetime:
 
 
 def _status_from_competition(comp: dict) -> tuple[str | None, str | None]:
-    status = comp.get("status") or {}
-    status_type = status.get("type") or {}
+    comp = _as_dict(comp)
+    status = _as_dict(comp.get("status"))
+    status_type = _as_dict(status.get("type"))
 
     state = status_type.get("state")
     completed = bool(status_type.get("completed"))
@@ -124,22 +133,33 @@ def _status_from_competition(comp: dict) -> tuple[str | None, str | None]:
 
     return name or "UNK", description or detail or name or "Unknown"
 
-
 def _round_name(event: dict, comp: dict) -> str | None:
+    event = _as_dict(event)
+    comp = _as_dict(comp)
     candidates = []
 
-    season = event.get("season") or {}
-    season_type = season.get("type") or {}
+    season = _as_dict(event.get("season"))
+    season_type = _as_dict(season.get("type"))
     if season_type.get("name"):
         candidates.append(str(season_type["name"]))
 
-    for note in comp.get("notes") or []:
+    # ESPN sometimes stores season.type as an integer. In that case there is no
+    # readable round name here, so we simply skip it and continue with notes.
+    if isinstance(season.get("type"), str):
+        candidates.append(season["type"])
+
+    for note in _as_list(comp.get("notes")):
         if isinstance(note, dict):
             headline = note.get("headline") or note.get("text")
             if headline:
                 candidates.append(str(headline))
         elif note:
             candidates.append(str(note))
+
+    # Another ESPN field that can contain "Round of 16", "Quarterfinal", etc.
+    for key in ("name", "shortName"):
+        if event.get(key):
+            candidates.append(str(event[key]))
 
     for candidate in candidates:
         lowered = candidate.lower()
@@ -149,19 +169,21 @@ def _round_name(event: dict, comp: dict) -> str | None:
 
     return candidates[0] if candidates else None
 
-
 def _group_name(event: dict, comp: dict, round_name: str | None) -> str | None:
-    if round_name and "групп" not in round_name.lower():
+    event = _as_dict(event)
+    comp = _as_dict(comp)
+
+    if round_name and "групп" not in str(round_name).lower():
         return None
 
     candidates = []
 
-    group = event.get("group") or {}
+    group = _as_dict(event.get("group"))
     for key in ("name", "shortName", "abbreviation"):
         if group.get(key):
             candidates.append(str(group[key]))
 
-    for note in comp.get("notes") or []:
+    for note in _as_list(comp.get("notes")):
         if isinstance(note, dict):
             text = note.get("headline") or note.get("text")
         else:
@@ -176,27 +198,28 @@ def _group_name(event: dict, comp: dict, round_name: str | None) -> str | None:
 
     return None
 
-
 def _venue(comp: dict) -> str | None:
-    venue = comp.get("venue") or {}
+    comp = _as_dict(comp)
+    venue = _as_dict(comp.get("venue"))
     full_name = venue.get("fullName") or venue.get("name")
     if full_name:
         return str(full_name)
 
-    address = venue.get("address") or {}
+    address = _as_dict(venue.get("address"))
     city = address.get("city")
     if city:
         return str(city)
 
     return None
 
-
 def _competitors(comp: dict) -> tuple[dict, dict] | None:
+    comp = _as_dict(comp)
     home = None
     away = None
 
-    for item in comp.get("competitors") or []:
-        team = item.get("team") or {}
+    for item in _as_list(comp.get("competitors")):
+        item = _as_dict(item)
+        team = _as_dict(item.get("team"))
         name = team.get("displayName") or team.get("shortDisplayName") or team.get("name")
         score = _parse_score(item.get("score"))
         value = {
@@ -214,13 +237,13 @@ def _competitors(comp: dict) -> tuple[dict, dict] | None:
 
     return home, away
 
-
 def _event_to_match(event: dict) -> dict | None:
-    competitions = event.get("competitions") or []
+    event = _as_dict(event)
+    competitions = _as_list(event.get("competitions"))
     if not competitions:
         return None
 
-    comp = competitions[0]
+    comp = _as_dict(competitions[0])
     competitors = _competitors(comp)
     if not competitors:
         return None
@@ -239,7 +262,6 @@ def _event_to_match(event: dict) -> dict | None:
     try:
         fixture_id = int(raw_id)
     except (TypeError, ValueError):
-        # Stable fallback, practically should not be needed for ESPN.
         fixture_id = abs(hash((event.get("date"), home["name"], away["name"]))) % 10_000_000_000
 
     kickoff = _parse_kickoff(event.get("date"))
@@ -259,7 +281,6 @@ def _event_to_match(event: dict) -> dict | None:
         "away_goals": away_goals,
         "raw": json.dumps({"source": "espn_scoreboard", "event": event}, ensure_ascii=False),
     }
-
 
 def _fetch_world_cup_matches_sync(
     start_date: str = DEFAULT_START_DATE,

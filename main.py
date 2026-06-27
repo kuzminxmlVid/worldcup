@@ -32,7 +32,7 @@ from keyboards import main_keyboard, nav_inline_keyboard, match_inline_keyboard,
 from match_card import build_match_card
 from scheduler import setup_scheduler, sync_fixtures, sync_played_scores
 
-VERSION = "external-espn-schedule-v26"
+VERSION = "external-espn-schedule-v27-int-type-hotfix"
 
 logging.basicConfig(level=logging.INFO)
 config = load_config()
