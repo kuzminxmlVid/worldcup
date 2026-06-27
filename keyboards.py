@@ -16,7 +16,7 @@ def main_keyboard() -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text="Следующий матч"), KeyboardButton(text="Команды")],
             [KeyboardButton(text="Сегодня"), KeyboardButton(text="Завтра")],
-            [KeyboardButton(text="7 дней")],
+            [KeyboardButton(text="7 дней"), KeyboardButton(text="Плей-офф")],
         ],
         resize_keyboard=True,
         input_field_placeholder="Выбери действие",
@@ -35,6 +35,7 @@ def nav_inline_keyboard(reminders_enabled: bool | None = None) -> InlineKeyboard
                 InlineKeyboardButton(text="7 дней", callback_data="nav:week"),
             ],
             [
+                InlineKeyboardButton(text="Плей-офф", callback_data="nav:playoffs"),
                 InlineKeyboardButton(text="Команды", callback_data="nav:teams"),
             ],
         ]
@@ -99,6 +100,9 @@ def match_list_keyboard(rows, tz, reminders_enabled: bool | None = None) -> Inli
     inline_keyboard.extend([
         [
             InlineKeyboardButton(text="Следующий", callback_data="nav:next"),
+            InlineKeyboardButton(text="Плей-офф", callback_data="nav:playoffs"),
+        ],
+        [
             InlineKeyboardButton(text="Команды", callback_data="nav:teams"),
         ],
     ])

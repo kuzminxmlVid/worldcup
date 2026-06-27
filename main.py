@@ -19,6 +19,7 @@ from formatting import (
     PREDICTION_MAX_LEN,
     day_bounds_utc,
     format_matches,
+    format_playoff_matches,
     format_debug,
     format_alerts_status,
     format_user_match_data,
@@ -32,7 +33,7 @@ from keyboards import main_keyboard, nav_inline_keyboard, match_inline_keyboard,
 from match_card import build_match_card
 from scheduler import setup_scheduler, sync_fixtures, sync_played_scores
 
-VERSION = "external-espn-schedule-v27-int-type-hotfix"
+VERSION = "external-espn-schedule-v28-playoffs-button"
 
 logging.basicConfig(level=logging.INFO)
 config = load_config()
@@ -235,6 +236,21 @@ async def send_week_text(message: Message):
     _, end_utc = day_bounds_utc(today_local + timedelta(days=7), config.app_tz)
     rows = await db.get_matches_between(pool, start_utc, end_utc)
     await send_matches_with_buttons(message, "Матчи ЧМ на 7 дней", rows)
+
+
+async def send_playoffs_text(message: Message):
+    enabled = await reminders_enabled_for(message.chat.id)
+    rows = await db.get_playoff_matches(pool)
+    text = format_playoff_matches(rows, config.app_tz)
+
+    if not rows:
+        await message.answer(text, reply_markup=nav_inline_keyboard(enabled))
+        return
+
+    parts = split_telegram_text(text)
+    for i, part in enumerate(parts):
+        markup = match_list_keyboard(rows, config.app_tz, enabled) if i == len(parts) - 1 else None
+        await message.answer(part, reply_markup=markup)
 
 
 async def send_match_personal_post(
@@ -698,6 +714,12 @@ async def tomorrow(message: Message):
     await send_tomorrow_text(message)
 
 
+@dp.message(Command("playoffs"))
+@dp.message(Command("playoff"))
+async def playoffs(message: Message):
+    await send_playoffs_text(message)
+
+
 @dp.message(Command("week"))
 async def week(message: Message):
     await send_week_text(message)
@@ -733,6 +755,11 @@ async def button_next_match(message: Message):
     await send_next_match_text(message)
 
 
+@dp.message(F.text == "Плей-офф")
+async def button_playoffs(message: Message):
+    await send_playoffs_text(message)
+
+
 @dp.message(F.text == "7 дней")
 async def button_week(message: Message):
     await send_week_text(message)
@@ -755,6 +782,8 @@ async def nav_callback(callback: CallbackQuery):
         await send_next_match_text(callback.message, user_id=callback.from_user.id)
     elif action == "week":
         await send_week_text(callback.message)
+    elif action == "playoffs":
+        await send_playoffs_text(callback.message)
     elif action == "teams":
         await send_team_picker(callback.message)
     elif action == "team_search":

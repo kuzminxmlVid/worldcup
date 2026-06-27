@@ -190,18 +190,6 @@ async def replace_matches(pool: asyncpg.Pool, matches: list[dict]) -> int:
     return len(matches)
 
 
-
-async def get_all_matches(pool: asyncpg.Pool):
-    async with pool.acquire() as conn:
-        return await conn.fetch(
-            """
-            SELECT *
-            FROM matches
-            ORDER BY kickoff_utc ASC
-            """
-        )
-
-
 async def get_matches_between(pool: asyncpg.Pool, start_utc, end_utc):
     async with pool.acquire() as conn:
         return await conn.fetch(
@@ -664,3 +652,35 @@ async def get_group_standings(pool: asyncpg.Pool, group_name: str):
         stats["rank"] = idx
 
     return ordered
+
+
+
+async def get_playoff_matches(pool: asyncpg.Pool):
+    async with pool.acquire() as conn:
+        return await conn.fetch(
+            """
+            SELECT *
+            FROM matches
+            WHERE
+                -- Playoff stage by readable round name.
+                (
+                    round_name IS NOT NULL
+                    AND (
+                        round_name ILIKE '%финал%'
+                        OR round_name ILIKE '%1/%'
+                        OR round_name ILIKE '%round of%'
+                        OR round_name ILIKE '%quarter%'
+                        OR round_name ILIKE '%semi%'
+                        OR round_name ILIKE '%third%'
+                    )
+                )
+                OR
+                -- Fallback for external feeds that do not expose round names well.
+                -- World Cup 2026 knockout stage starts on 2026-06-28.
+                kickoff_utc >= COALESCE(
+                    NULLIF(current_setting('app.playoff_start_utc', true), '')::timestamptz,
+                    TIMESTAMPTZ '2026-06-28 00:00:00+00'
+                )
+            ORDER BY kickoff_utc ASC
+            """
+        )

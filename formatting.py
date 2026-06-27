@@ -342,3 +342,71 @@ def split_telegram_text(text: str, limit: int = 3900) -> list[str]:
         parts.append(current)
 
     return parts
+
+
+
+def _playoff_round_key(row) -> tuple[int, str]:
+    name = str(row["round_name"] or "").lower()
+
+    if "1/16" in name or "round of 32" in name:
+        return (1, "1/16 финала")
+    if "1/8" in name or "round of 16" in name:
+        return (2, "1/8 финала")
+    if "1/4" in name or "quarter" in name:
+        return (3, "1/4 финала")
+    if "1/2" in name or "semi" in name:
+        return (4, "1/2 финала")
+    if "3" in name and "мест" in name or "third" in name:
+        return (5, "Матч за 3-е место")
+    if "финал" in name or "final" in name:
+        return (6, "Финал")
+
+    # Date fallback: keeps unknown external stages in a reasonable order.
+    return (99, row["round_name"] or "Плей-офф")
+
+
+def format_playoff_matches(rows, tz: ZoneInfo) -> str:
+    if not rows:
+        return (
+            "Плей-офф ЧМ\n\n"
+            "Матчей плей-офф пока нет в базе.\n\n"
+            "Нажми /sync позже: пары появятся, когда внешний источник опубликует их."
+        )
+
+    grouped = OrderedDict()
+    for row in rows:
+        _, label = _playoff_round_key(row)
+        grouped.setdefault(label, []).append(row)
+
+    # Keep groups ordered by first match date, then by playoff stage key.
+    ordered_labels = sorted(
+        grouped.keys(),
+        key=lambda label: (
+            min(item["kickoff_utc"] for item in grouped[label]),
+            min(_playoff_round_key(item)[0] for item in grouped[label]),
+        ),
+    )
+
+    parts = ["Плей-офф ЧМ"]
+
+    for label in ordered_labels:
+        parts.append(label)
+
+        for row in grouped[label]:
+            kickoff = row["kickoff_utc"].astimezone(tz)
+            score = ""
+            if row["home_goals"] is not None and row["away_goals"] is not None:
+                score = f"  •  {row['home_goals']}:{row['away_goals']}"
+
+            lines = [
+                f"{kickoff.strftime('%d.%m.%Y %H:%M')}",
+                f"{team_with_flag(row['home_team'])} — {team_with_flag(row['away_team'])}{score}",
+            ]
+
+            if row["venue"]:
+                lines.append(f"Стадион {row['venue']}")
+
+            lines.append(f"Карточка: /match_{row['fixture_id']}")
+            parts.append("\n".join(lines))
+
+    return "\n\n".join(parts)
