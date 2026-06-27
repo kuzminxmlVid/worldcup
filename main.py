@@ -29,11 +29,10 @@ from formatting import (
     help_text,
 )
 from keyboards import main_keyboard, nav_inline_keyboard, match_inline_keyboard, match_list_keyboard
-from local_schedule import load_matches, SCHEDULE_PATH
 from match_card import build_match_card
 from scheduler import setup_scheduler, sync_fixtures, sync_played_scores
 
-VERSION = "local-schedule-2026-06-19-v25-team-picker-selfcontained"
+VERSION = "external-espn-schedule-v26"
 
 logging.basicConfig(level=logging.INFO)
 config = load_config()
@@ -316,15 +315,21 @@ async def send_next_match_text(message: Message, user_id: int | None = None):
 
 async def send_source_text(message: Message):
     enabled = await reminders_enabled_for(message.chat.id)
-    try:
-        matches = load_matches()
-        await message.answer(
-            f"Источник: локальный файл\nФайл: {SCHEDULE_PATH.name}\nВерсия кода: {VERSION}\nМатчей в файле: {len(matches)}",
-            reply_markup=nav_inline_keyboard(enabled),
-        )
-    except Exception as e:
-        await message.answer(f"Не получилось прочитать schedule.json: {e}", reply_markup=nav_inline_keyboard(enabled))
+    count, first_row, last_row, next_rows = await db.get_debug_stats(pool)
 
+    lines = [
+        "Источник расписания: ESPN public scoreboard",
+        "URL: site.api.espn.com / soccer / fifa.world / scoreboard",
+        f"Версия кода: {VERSION}",
+        f"Матчей в базе: {count}",
+    ]
+
+    if first_row:
+        lines.append(f"Первый матч: {first_row['kickoff_utc'].astimezone(config.app_tz).strftime('%d.%m.%Y %H:%M')}")
+    if last_row:
+        lines.append(f"Последний матч: {last_row['kickoff_utc'].astimezone(config.app_tz).strftime('%d.%m.%Y %H:%M')}")
+
+    await message.answer("\n".join(lines), reply_markup=nav_inline_keyboard(enabled))
 
 async def send_debug_text(message: Message):
     enabled = await reminders_enabled_for(message.chat.id)
@@ -663,7 +668,7 @@ async def stop(message: Message):
 @dp.message(Command("sync"))
 async def sync(message: Message):
     enabled = await reminders_enabled_for(message.chat.id)
-    await message.answer("Обновляю расписание из локального файла...")
+    await message.answer("Обновляю расписание из открытого источника ESPN...")
     try:
         count = await sync_fixtures(pool)
         await message.answer(f"Готово. Загружено матчей: {count}.", reply_markup=nav_inline_keyboard(enabled))

@@ -9,12 +9,77 @@ import db
 from api_football import ApiFootballError, fetch_score_for_match, fetch_scores_for_matches
 from formatting import day_bounds_utc, format_matches, format_reminder, split_telegram_text
 from keyboards import nav_inline_keyboard
-from local_schedule import load_matches
+from espn_schedule import fetch_world_cup_matches
 from match_card import build_match_card
 
 
+def _normalize_match_team(name: str) -> str:
+    return str(name).strip().lower().replace("&", "and").replace("ё", "е")
+
+
+def _same_match(existing, incoming) -> bool:
+    existing_kickoff = existing["kickoff_utc"]
+    incoming_kickoff = incoming["kickoff_utc"]
+
+    # Keep existing fixture_id if the same match already exists in DB.
+    # This preserves user predictions/expectations that are linked by fixture_id.
+    time_diff = abs((existing_kickoff - incoming_kickoff).total_seconds()) / 3600
+    if time_diff > 3:
+        return False
+
+    existing_home = _normalize_match_team(existing["home_team"])
+    existing_away = _normalize_match_team(existing["away_team"])
+    incoming_home = _normalize_match_team(incoming["home_team"])
+    incoming_away = _normalize_match_team(incoming["away_team"])
+
+    return existing_home == incoming_home and existing_away == incoming_away
+
+
+def _preserve_existing_fixture_ids(matches: list[dict], existing_rows) -> list[dict]:
+    existing_rows = list(existing_rows or [])
+    used_existing_ids = set()
+    result = []
+
+    for match in matches:
+        preserved_id = None
+
+        for existing in existing_rows:
+            existing_id = int(existing["fixture_id"])
+            if existing_id in used_existing_ids:
+                continue
+
+            if _same_match(existing, match):
+                preserved_id = existing_id
+                used_existing_ids.add(existing_id)
+                break
+
+        if preserved_id is not None:
+            # Keep the bot's old internal fixture_id, but store ESPN id in raw.
+            raw = match.get("raw")
+            try:
+                import json
+                raw_payload = json.loads(raw) if isinstance(raw, str) else dict(raw or {})
+                raw_payload["espn_fixture_id"] = match["fixture_id"]
+                match["raw"] = json.dumps(raw_payload, ensure_ascii=False)
+            except Exception:
+                pass
+            match["fixture_id"] = preserved_id
+
+        result.append(match)
+
+    return result
+
+
 async def sync_fixtures(pool) -> int:
-    matches = load_matches()
+    matches = await fetch_world_cup_matches()
+
+    if not matches:
+        logging.warning("External schedule sync returned zero matches. Keeping current DB unchanged.")
+        return 0
+
+    existing_rows = await db.get_all_matches(pool)
+    matches = _preserve_existing_fixture_ids(matches, existing_rows)
+
     return await db.replace_matches(pool, matches)
 
 
