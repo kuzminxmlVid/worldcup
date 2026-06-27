@@ -19,6 +19,7 @@ from formatting import (
     PREDICTION_MAX_LEN,
     day_bounds_utc,
     format_matches,
+    format_next_round_matches,
     format_debug,
     format_alerts_status,
     format_user_match_data,
@@ -28,12 +29,11 @@ from formatting import (
     split_telegram_text,
     help_text,
 )
-from keyboards import main_keyboard, nav_inline_keyboard, match_inline_keyboard, match_list_keyboard
+from keyboards import main_keyboard, nav_inline_keyboard, match_inline_keyboard, match_list_keyboard, next_round_keyboard
 from match_card import build_match_card
-from playoff_bracket import build_playoff_bracket
 from scheduler import setup_scheduler, sync_fixtures, sync_played_scores
 
-VERSION = "external-espn-schedule-v29-playoff-bracket-image"
+VERSION = "external-espn-schedule-v30-next-round-list"
 
 logging.basicConfig(level=logging.INFO)
 config = load_config()
@@ -238,29 +238,20 @@ async def send_week_text(message: Message):
     await send_matches_with_buttons(message, "Матчи ЧМ на 7 дней", rows)
 
 
-async def send_playoffs_text(message: Message):
-    enabled = await reminders_enabled_for(message.chat.id)
-    rows = await db.get_playoff_matches(pool)
-    image_path = build_playoff_bracket(rows, config.app_tz)
+async def send_next_round_text(message: Message):
+    round_label, rows = await db.get_next_playoff_round_matches(pool)
+    text = format_next_round_matches(round_label, rows, config.app_tz)
 
-    try:
-        caption = (
-            "Плей-офф ЧМ 2026\n"
-            "Актуальная сетка на момент запроса.\n\n"
-            "Открой нужный матч через ссылку /match_123 на картинке или кнопками ниже."
-        )
+    if not rows:
+        await message.answer(text, reply_markup=nav_inline_keyboard(await reminders_enabled_for(message.chat.id)))
+        return
 
-        markup = match_list_keyboard(rows, config.app_tz, enabled) if rows else nav_inline_keyboard(enabled)
-        await message.answer_photo(
-            FSInputFile(image_path),
-            caption=caption,
-            reply_markup=markup,
-        )
-    finally:
-        try:
-            Path(image_path).unlink(missing_ok=True)
-        except Exception:
-            pass
+    parts = split_telegram_text(text)
+    for i, part in enumerate(parts):
+        markup = next_round_keyboard(rows, config.app_tz) if i == len(parts) - 1 else None
+        await message.answer(part, reply_markup=markup)
+
+
 
 
 async def send_match_personal_post(
@@ -724,10 +715,12 @@ async def tomorrow(message: Message):
     await send_tomorrow_text(message)
 
 
+@dp.message(Command("round"))
+@dp.message(Command("next_round"))
 @dp.message(Command("playoffs"))
 @dp.message(Command("playoff"))
-async def playoffs(message: Message):
-    await send_playoffs_text(message)
+async def next_round(message: Message):
+    await send_next_round_text(message)
 
 
 @dp.message(Command("week"))
@@ -765,9 +758,9 @@ async def button_next_match(message: Message):
     await send_next_match_text(message)
 
 
-@dp.message(F.text == "Плей-офф")
-async def button_playoffs(message: Message):
-    await send_playoffs_text(message)
+@dp.message(F.text == "Следующий раунд")
+async def button_next_round(message: Message):
+    await send_next_round_text(message)
 
 
 @dp.message(F.text == "7 дней")
@@ -792,8 +785,8 @@ async def nav_callback(callback: CallbackQuery):
         await send_next_match_text(callback.message, user_id=callback.from_user.id)
     elif action == "week":
         await send_week_text(callback.message)
-    elif action == "playoffs":
-        await send_playoffs_text(callback.message)
+    elif action == "next_round":
+        await send_next_round_text(callback.message)
     elif action == "teams":
         await send_team_picker(callback.message)
     elif action == "team_search":

@@ -16,7 +16,7 @@ def main_keyboard() -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text="Следующий матч"), KeyboardButton(text="Команды")],
             [KeyboardButton(text="Сегодня"), KeyboardButton(text="Завтра")],
-            [KeyboardButton(text="7 дней"), KeyboardButton(text="Плей-офф")],
+            [KeyboardButton(text="7 дней"), KeyboardButton(text="Следующий раунд")],
         ],
         resize_keyboard=True,
         input_field_placeholder="Выбери действие",
@@ -35,7 +35,7 @@ def nav_inline_keyboard(reminders_enabled: bool | None = None) -> InlineKeyboard
                 InlineKeyboardButton(text="7 дней", callback_data="nav:week"),
             ],
             [
-                InlineKeyboardButton(text="Плей-офф", callback_data="nav:playoffs"),
+                InlineKeyboardButton(text="Следующий раунд", callback_data="nav:next_round"),
                 InlineKeyboardButton(text="Команды", callback_data="nav:teams"),
             ],
         ]
@@ -100,7 +100,7 @@ def match_list_keyboard(rows, tz, reminders_enabled: bool | None = None) -> Inli
     inline_keyboard.extend([
         [
             InlineKeyboardButton(text="Следующий", callback_data="nav:next"),
-            InlineKeyboardButton(text="Плей-офф", callback_data="nav:playoffs"),
+            InlineKeyboardButton(text="Следующий раунд", callback_data="nav:next_round"),
         ],
         [
             InlineKeyboardButton(text="Команды", callback_data="nav:teams"),
@@ -135,5 +135,29 @@ def team_select_keyboard(team_names: list[str], team_flags: dict | None = None) 
         InlineKeyboardButton(text="Сегодня", callback_data="nav:today"),
         InlineKeyboardButton(text="Следующий", callback_data="nav:next"),
     ])
+
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+
+
+
+def next_round_keyboard(rows, tz) -> InlineKeyboardMarkup:
+    inline_keyboard = []
+
+    for row in rows:
+        kickoff = row["kickoff_utc"].astimezone(tz)
+        button_text = (
+            f"{kickoff.strftime('%d.%m %H:%M')} · "
+            f"{row['home_team']} — {row['away_team']}"
+        )
+
+        if len(button_text) > 60:
+            button_text = button_text[:57].rstrip() + "..."
+
+        inline_keyboard.append([
+            InlineKeyboardButton(
+                text=button_text,
+                callback_data=f"open_match:{row['fixture_id']}",
+            )
+        ])
 
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)

@@ -410,3 +410,38 @@ def format_playoff_matches(rows, tz: ZoneInfo) -> str:
             parts.append("\n".join(lines))
 
     return "\n\n".join(parts)
+
+
+
+def format_next_round_matches(round_label: str | None, rows, tz: ZoneInfo) -> str:
+    if not rows:
+        return (
+            "Следующий раунд\n\n"
+            "Матчей следующего раунда пока нет в базе.\n\n"
+            "Нажми /sync позже: пары появятся, когда внешний источник их опубликует."
+        )
+
+    title = f"Следующий раунд: {round_label or 'Плей-офф'}"
+    parts = [title]
+
+    for index, row in enumerate(rows, start=1):
+        kickoff = row["kickoff_utc"].astimezone(tz)
+        group_or_round = row["round_name"] or round_label or "Плей-офф"
+
+        score = ""
+        if row["home_goals"] is not None and row["away_goals"] is not None:
+            score = f" — {row['home_goals']}:{row['away_goals']}"
+
+        lines = [
+            f"{index}. {kickoff.strftime('%d.%m.%Y %H:%M')}",
+            f"{team_with_flag(row['home_team'])} — {team_with_flag(row['away_team'])}{score}",
+            str(group_or_round),
+        ]
+
+        if row["venue"]:
+            lines.append(f"Стадион {row['venue']}")
+
+        lines.append(f"Карточка: /match_{row['fixture_id']}")
+        parts.append("\n".join(lines))
+
+    return "\n\n".join(parts)

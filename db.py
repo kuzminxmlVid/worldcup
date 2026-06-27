@@ -677,3 +677,77 @@ async def get_playoff_matches(pool: asyncpg.Pool):
             ORDER BY kickoff_utc ASC
             """
         )
+
+
+
+async def get_next_playoff_round_matches(pool: asyncpg.Pool):
+    rows = await get_playoff_matches(pool)
+    rows = list(rows or [])
+
+    if not rows:
+        return None, []
+
+    def stage_key(row):
+        name = str(row["round_name"] or "").lower()
+        kickoff = row["kickoff_utc"]
+
+        if "1/16" in name or "round of 32" in name:
+            return 1, "1/16 финала"
+        if "1/8" in name or "round of 16" in name:
+            return 2, "1/8 финала"
+        if "1/4" in name or "quarter" in name:
+            return 3, "1/4 финала"
+        if "1/2" in name or "semi" in name:
+            return 4, "1/2 финала"
+        if ("3" in name and "мест" in name) or "third" in name:
+            return 6, "Матч за 3-е место"
+        if "финал" in name or "final" in name:
+            return 5, "Финал"
+
+        # Date fallback for ESPN feeds with weak round names.
+        if kickoff:
+            day = kickoff.date()
+            if day <= day.replace(year=2026, month=7, day=1):
+                return 1, "1/16 финала"
+            if day <= day.replace(year=2026, month=7, day=7):
+                return 2, "1/8 финала"
+            if day <= day.replace(year=2026, month=7, day=12):
+                return 3, "1/4 финала"
+            if day <= day.replace(year=2026, month=7, day=15):
+                return 4, "1/2 финала"
+            if day <= day.replace(year=2026, month=7, day=18):
+                return 5, "Финал"
+
+        return 99, row["round_name"] or "Плей-офф"
+
+    def is_finished(row) -> bool:
+        if row["home_goals"] is None or row["away_goals"] is None:
+            return False
+        return str(row["status_short"] or "").upper() in ("FT", "AET", "PEN", "FULL_TIME")
+
+    grouped = {}
+    labels = {}
+
+    for row in rows:
+        key, label = stage_key(row)
+        grouped.setdefault(key, []).append(row)
+        labels[key] = label
+
+    for key in sorted(grouped.keys()):
+        if key == 6:
+            # Third-place match is not the "next round" until everything else is gone.
+            continue
+
+        round_rows = sorted(grouped[key], key=lambda r: r["kickoff_utc"])
+        if any(not is_finished(row) for row in round_rows):
+            return labels[key], round_rows
+
+    # If all normal playoff rounds are finished, show third-place if it is still pending.
+    if 6 in grouped:
+        round_rows = sorted(grouped[6], key=lambda r: r["kickoff_utc"])
+        if any(not is_finished(row) for row in round_rows):
+            return labels[6], round_rows
+
+    # Otherwise show the final completed round for historical access.
+    last_key = max(grouped.keys())
+    return labels[last_key], sorted(grouped[last_key], key=lambda r: r["kickoff_utc"])
